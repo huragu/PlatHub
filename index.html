@@ -27,7 +27,14 @@
 
     <!-- Sidebar: playlists (desktop only, mobile uses tab) -->
     <aside class="sidebar" id="sidebarView">
-      <div class="sidebar-title">PLAYLISTS</div>
+      <div class="sidebar-header">
+        <div class="sidebar-title">PLAYLISTS</div>
+        <button class="btn-outline btn-sm" id="toggleNewPlaylistFormDesktop">+ 新規</button>
+      </div>
+      <div class="add-form" id="newPlaylistFormDesktop" hidden>
+        <input type="text" id="newPlaylistInputDesktop" placeholder="プレイリスト名を入力" class="input">
+        <button class="btn-primary" id="createPlaylistBtnDesktop" style="margin-top:8px; width:100%;">作成</button>
+      </div>
       <div id="playlistsListDesktop" class="playlists-list"></div>
     </aside>
 
@@ -44,11 +51,11 @@
       <div class="add-form" id="addForm" hidden>
         <input type="text" id="addTitleInput" placeholder="タイトル（省略可）" class="input">
         <div class="add-form-row">
-          <input type="text" id="addUrlInput" placeholder="YouTube URL または MP3/Podcast URL を貼り付け" class="input">
+          <input type="text" id="addUrlInput" placeholder="YouTube / Apple Podcasts / MP3 URL を貼り付け" class="input">
           <button class="btn-primary" id="addTrackBtn">追加</button>
         </div>
         <p class="add-error" id="addError" hidden></p>
-        <p class="add-hint">対応: youtube.com/watch?v=… ・ youtu.be/… ・ .mp3 / .ogg / RSSフィード</p>
+        <p class="add-hint">対応: youtube.com/watch?v=… ・ youtu.be/… ・ podcasts.apple.com/… ・ .mp3 / .ogg / RSSフィード</p>
       </div>
 
       <div class="track-list" id="trackList">
@@ -66,10 +73,21 @@
 
     <!-- Mobile: playlists view (shown via tab) -->
     <section class="mobile-playlists-view" id="mobilePlaylistsView" hidden>
-      <div class="new-playlist-row">
-        <input type="text" id="newPlaylistInput" placeholder="新しいプレイリスト名" class="input">
-        <button class="btn-primary" id="createPlaylistBtn">作成</button>
+      <div class="tracks-header">
+        <div>
+          <div class="tracks-title">プレイリスト</div>
+          <div class="tracks-sub" id="plListCount">0 件</div>
+        </div>
+        <button class="btn-outline" id="toggleNewPlaylistForm">+ 新規作成</button>
       </div>
+
+      <div class="add-form" id="newPlaylistForm" hidden>
+        <div class="add-form-row">
+          <input type="text" id="newPlaylistInput" placeholder="プレイリスト名を入力" class="input">
+          <button class="btn-primary" id="createPlaylistBtn">作成</button>
+        </div>
+      </div>
+
       <div id="playlistsListMobile" class="playlists-list"></div>
     </section>
 
@@ -183,6 +201,7 @@
 <script src="https://www.youtube.com/iframe_api"></script>
 <script src="js/storage.js"></script>
 <script src="js/services.js"></script>
+<script src="js/apple-podcast-resolver.js"></script>
 <script src="js/youtube-engine.js"></script>
 <script src="js/audio-engine.js"></script>
 <script src="js/player-panel.js"></script>

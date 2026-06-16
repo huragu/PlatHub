@@ -122,13 +122,28 @@ input::placeholder { color: var(--text-ghost); }
   flex-shrink: 0;
   overflow-y: auto;
 }
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 8px;
+  gap: 8px;
+}
 .sidebar-title {
   font-family: var(--font-display);
   font-size: 10px;
   font-weight: 600;
   color: var(--text-faint);
   letter-spacing: 0.12em;
-  padding: 16px 16px 8px;
+}
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+#newPlaylistFormDesktop {
+  padding: 0 16px 12px;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
 }
 
 /* ═══ Playlists list (shared desktop/mobile) ═══ */
@@ -226,6 +241,9 @@ input::placeholder { color: var(--text-ghost); }
   font-size: 12px;
   color: var(--red);
   margin: 6px 0 0;
+}
+.add-error.add-info {
+  color: var(--podcast-color);
 }
 .add-hint {
   font-size: 11px;
@@ -745,17 +763,17 @@ input::placeholder { color: var(--text-ghost); }
   .main { flex-direction: column; }
 
   .tracks-view.tab-hidden { display: none; }
-  .mobile-playlists-view.tab-hidden { display: none; }
-  .mobile-player-view.tab-hidden { display: none; }
+  .mobile-playlists-view[hidden] { display: none; }
+  .mobile-player-view[hidden] { display: none; }
 
-  .mobile-playlists-view {
+  .mobile-playlists-view:not([hidden]) {
     flex: 1;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     padding-bottom: 130px;
   }
-  .mobile-player-view {
+  .mobile-player-view:not([hidden]) {
     flex: 1;
     overflow: hidden;
     display: flex;

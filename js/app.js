@@ -35,6 +35,19 @@
 
   const playlistsListDesktop = $("#playlistsListDesktop");
   const playlistsListMobile = $("#playlistsListMobile");
+  const plListCountEl = $("#plListCount");
+
+  // Mobile new-playlist form
+  const toggleNewPlaylistFormBtn = $("#toggleNewPlaylistForm");
+  const newPlaylistForm = $("#newPlaylistForm");
+  const newPlaylistInput = $("#newPlaylistInput");
+  const createPlaylistBtn = $("#createPlaylistBtn");
+
+  // Desktop new-playlist form
+  const toggleNewPlaylistFormDesktopBtn = $("#toggleNewPlaylistFormDesktop");
+  const newPlaylistFormDesktop = $("#newPlaylistFormDesktop");
+  const newPlaylistInputDesktop = $("#newPlaylistInputDesktop");
+  const createPlaylistBtnDesktop = $("#createPlaylistBtnDesktop");
 
   const activePlNameEl = $("#activePlName");
   const activePlCountEl = $("#activePlCount");
@@ -46,9 +59,6 @@
   const addErrorEl = $("#addError");
   const trackListEl = $("#trackList");
   const emptyStateEl = $("#emptyState");
-
-  const newPlaylistInput = $("#newPlaylistInput");
-  const createPlaylistBtn = $("#createPlaylistBtn");
 
   const miniBar = $("#miniBar");
   const miniBarTitle = $("#miniBarTitle");
@@ -244,26 +254,55 @@
      Track / Playlist CRUD
   ════════════════════════════════════════════ */
 
-  function addTrack() {
+  async function addTrack() {
     addErrorEl.hidden = true;
     const url = addUrlInput.value.trim();
     if (!url) { showAddError("URLを入力してください"); return; }
 
     const service = Services.detect(url);
-    let sourceId = url;
+
     if (service === "youtube") {
       const vid = Services.extractYouTubeId(url);
       if (!vid) { showAddError("YouTubeのURLを確認してください（例: youtube.com/watch?v=XXXXX）"); return; }
-      sourceId = vid;
+      commitNewTrack({ service: "youtube", sourceId: vid, url, title: addTitleInput.value.trim() || `YouTube: ${vid}`, artist: "" });
+      return;
     }
 
-    const track = {
-      id: `t${Date.now()}`,
-      title: addTitleInput.value.trim() || (service === "youtube" ? `YouTube: ${sourceId}` : url.split("/").pop() || url),
-      artist: "",
-      service, sourceId, url,
-    };
+    if (service === "apple_podcast") {
+      const ids = Services.extractApplePodcastIds(url);
+      if (!ids) { showAddError("Apple PodcastsのURLを確認してください"); return; }
 
+      setAddTrackLoading(true, "Apple Podcastsからエピソードを検索中…");
+      try {
+        const resolved = await ApplePodcastResolver.resolve(ids);
+        commitNewTrack({
+          service: "rss",
+          sourceId: resolved.audioUrl,
+          url,
+          title: addTitleInput.value.trim() || resolved.title,
+          artist: resolved.artist || "",
+        });
+        if (resolved.note) showAddInfo(resolved.note);
+      } catch (e) {
+        showAddError(e.message || "Apple Podcastsの解決に失敗しました");
+      } finally {
+        setAddTrackLoading(false);
+      }
+      return;
+    }
+
+    // rss (direct MP3/feed) or generic link
+    commitNewTrack({
+      service,
+      sourceId: url,
+      url,
+      title: addTitleInput.value.trim() || (url.split("/").pop() || url),
+      artist: "",
+    });
+  }
+
+  function commitNewTrack({ service, sourceId, url, title, artist }) {
+    const track = { id: `t${Date.now()}`, title, artist, service, sourceId, url };
     const pl = getActivePlaylist();
     pl.tracks.push(track);
     persist();
@@ -279,7 +318,27 @@
 
   function showAddError(msg) {
     addErrorEl.textContent = msg;
+    addErrorEl.className = "add-error";
     addErrorEl.hidden = false;
+  }
+
+  function showAddInfo(msg) {
+    addErrorEl.textContent = msg;
+    addErrorEl.className = "add-error add-info";
+    addErrorEl.hidden = false;
+  }
+
+  function setAddTrackLoading(isLoading, message) {
+    addTrackBtn.disabled = isLoading;
+    addUrlInput.disabled = isLoading;
+    addTitleInput.disabled = isLoading;
+    if (isLoading) {
+      addTrackBtn.dataset.originalText = addTrackBtn.dataset.originalText || addTrackBtn.textContent;
+      addTrackBtn.textContent = "検索中…";
+      showAddInfo(message || "処理中…");
+    } else {
+      addTrackBtn.textContent = addTrackBtn.dataset.originalText || "追加";
+    }
   }
 
   function removeTrack(trackId) {
@@ -294,16 +353,26 @@
     renderAll();
   }
 
-  function createPlaylist() {
-    const name = newPlaylistInput.value.trim();
+  function createPlaylist(inputEl) {
+    const name = inputEl.value.trim();
     if (!name) return;
     const id = `pl${Date.now()}`;
     state.playlists.push({ id, name, tracks: [] });
     state.activePlaylistId = id;
-    newPlaylistInput.value = "";
+    inputEl.value = "";
+    closeNewPlaylistForms();
     persist();
     if (isMobile()) setMobileTab("tracks");
     renderAll();
+  }
+
+  function closeNewPlaylistForms() {
+    newPlaylistForm.hidden = true;
+    toggleNewPlaylistFormBtn.classList.remove("active");
+    toggleNewPlaylistFormBtn.textContent = "+ 新規作成";
+    newPlaylistFormDesktop.hidden = true;
+    toggleNewPlaylistFormDesktopBtn.classList.remove("active");
+    toggleNewPlaylistFormDesktopBtn.textContent = "+ 新規";
   }
 
   function selectPlaylist(id) {
@@ -386,6 +455,7 @@
         container.appendChild(buildPlaylistItem(pl));
       });
     });
+    if (plListCountEl) plListCountEl.textContent = `${state.playlists.length} 件`;
   }
 
   function buildPlaylistItem(pl) {
@@ -700,8 +770,31 @@
   addTrackBtn.addEventListener("click", addTrack);
   addUrlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addTrack(); });
 
-  createPlaylistBtn.addEventListener("click", createPlaylist);
-  newPlaylistInput.addEventListener("keydown", (e) => { if (e.key === "Enter") createPlaylist(); });
+  toggleNewPlaylistFormBtn.addEventListener("click", () => {
+    const willShow = newPlaylistForm.hidden;
+    closeNewPlaylistForms();
+    if (willShow) {
+      newPlaylistForm.hidden = false;
+      toggleNewPlaylistFormBtn.classList.add("active");
+      toggleNewPlaylistFormBtn.textContent = "✕ 閉じる";
+      newPlaylistInput.focus();
+    }
+  });
+  createPlaylistBtn.addEventListener("click", () => createPlaylist(newPlaylistInput));
+  newPlaylistInput.addEventListener("keydown", (e) => { if (e.key === "Enter") createPlaylist(newPlaylistInput); });
+
+  toggleNewPlaylistFormDesktopBtn.addEventListener("click", () => {
+    const willShow = newPlaylistFormDesktop.hidden;
+    closeNewPlaylistForms();
+    if (willShow) {
+      newPlaylistFormDesktop.hidden = false;
+      toggleNewPlaylistFormDesktopBtn.classList.add("active");
+      toggleNewPlaylistFormDesktopBtn.textContent = "✕";
+      newPlaylistInputDesktop.focus();
+    }
+  });
+  createPlaylistBtnDesktop.addEventListener("click", () => createPlaylist(newPlaylistInputDesktop));
+  newPlaylistInputDesktop.addEventListener("keydown", (e) => { if (e.key === "Enter") createPlaylist(newPlaylistInputDesktop); });
 
   dbPrevBtn.addEventListener("click", skipPrev);
   dbNextBtn.addEventListener("click", skipNext);
