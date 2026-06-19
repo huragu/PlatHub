@@ -76,56 +76,18 @@ const ApplePodcastResolver = (() => {
     if (!feedUrl) {
       throw new ResolveError("このPodcastのRSSフィードURLが取得できませんでした");
     }
-    return await resolveFromRssFeed(feedUrl, episodeId, showTitle);
-  }
-
-  async function resolveFromRssFeed(feedUrl, episodeId, showTitle) {
-    let xmlText;
     try {
-      const res = await fetch(feedUrl);
-      if (!res.ok) throw new Error(`RSS HTTP ${res.status}`);
-      xmlText = await res.text();
+      const resolved = await PodcastFeedResolver.resolve(feedUrl);
+      // PodcastFeedResolver already picked the latest episode and a
+      // sensible note; just make sure the show name matches what
+      // Apple told us (more reliable than the feed's own <title>).
+      return { ...resolved, artist: showTitle };
     } catch (e) {
       throw new ResolveError(
-        "RSSフィードの取得に失敗しました（配信元がCORSをブロックしている可能性があります）",
+        "RSSフィードの取得・解析に失敗しました（配信元がCORSをブロックしている可能性があります）",
         e
       );
     }
-
-    let doc;
-    try {
-      doc = new DOMParser().parseFromString(xmlText, "text/xml");
-      if (doc.querySelector("parsererror")) throw new Error("XML parse error");
-    } catch (e) {
-      throw new ResolveError("RSSフィードの解析に失敗しました", e);
-    }
-
-    const items = Array.from(doc.querySelectorAll("item"));
-    if (items.length === 0) {
-      throw new ResolveError("このRSSフィードにエピソードが見つかりませんでした");
-    }
-
-    // episodeId from Apple's URL doesn't map 1:1 to RSS <guid> in a
-    // standardized way across podcasts, so without a direct episodeUrl
-    // from step 1, we default to the most recent episode as a
-    // reasonable fallback and let the user know.
-    const item = items[0];
-    const enclosure = item.querySelector("enclosure");
-    const audioUrl = enclosure ? enclosure.getAttribute("url") : null;
-
-    if (!audioUrl) {
-      throw new ResolveError("エピソードの音声URLが見つかりませんでした");
-    }
-
-    const title = item.querySelector("title")?.textContent || "Untitled Episode";
-
-    return {
-      audioUrl,
-      title,
-      artist: showTitle,
-      artwork: null,
-      note: episodeId ? "指定エピソードを直接特定できず、最新エピソードを取得しました" : null,
-    };
   }
 
   class ResolveError extends Error {

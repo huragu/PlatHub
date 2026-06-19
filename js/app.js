@@ -116,7 +116,7 @@
     const t = getCurrentTrack();
     if (!t) return null;
     if (t.service === "youtube") return "youtube";
-    if (t.service === "rss") return "audio";
+    if (t.service === "direct_audio") return "audio";
     return null;
   }
 
@@ -141,7 +141,7 @@
       if (ytHostEl) {
         YouTubeEngine.load(ytHostEl, t.sourceId, volume, playing);
       }
-    } else if (t.service === "rss") {
+    } else if (t.service === "direct_audio") {
       YouTubeEngine.destroy();
       AudioEngine.load(t.sourceId, volume, playing);
     }
@@ -276,7 +276,7 @@
       try {
         const resolved = await ApplePodcastResolver.resolve(ids);
         commitNewTrack({
-          service: "rss",
+          service: "direct_audio",
           sourceId: resolved.audioUrl,
           url,
           title: addTitleInput.value.trim() || resolved.title,
@@ -291,14 +291,66 @@
       return;
     }
 
-    // rss (direct MP3/feed) or generic link
-    commitNewTrack({
-      service,
-      sourceId: url,
-      url,
-      title: addTitleInput.value.trim() || (url.split("/").pop() || url),
-      artist: "",
+    if (service === "direct_audio") {
+      commitNewTrack({
+        service: "direct_audio",
+        sourceId: url,
+        url,
+        title: addTitleInput.value.trim() || (url.split("/").pop() || url),
+        artist: "",
+      });
+      return;
+    }
+
+    // service === "podcast_feed" — anything not recognized above.
+    // Covers Omny (*.omnycontent.com/.../podcast.rss), Buzzsprout,
+    // Libsyn, Anchor/Spotify-for-Podcasters, self-hosted RSS, etc.
+    // We attempt to fetch+parse it as an RSS/Atom feed; if that fails,
+    // we offer to add it as a plain link instead.
+    setAddTrackLoading(true, "フィードを取得中…");
+    try {
+      const resolved = await PodcastFeedResolver.resolve(url);
+      commitNewTrack({
+        service: "direct_audio",
+        sourceId: resolved.audioUrl,
+        url,
+        title: addTitleInput.value.trim() || resolved.title,
+        artist: resolved.artist || "",
+      });
+      if (resolved.note) showAddInfo(resolved.note);
+    } catch (e) {
+      showAddError(
+        (e.message || "フィードの解析に失敗しました") + "　— 「リンクとして追加」も選べます"
+      );
+      offerLinkFallback(url);
+    } finally {
+      setAddTrackLoading(false);
+    }
+  }
+
+  /**
+   * When feed parsing fails, show a small inline action letting the
+   * user add the URL as a plain Link track instead of losing the input.
+   */
+  function offerLinkFallback(url) {
+    const existing = $("#addLinkFallbackBtn");
+    if (existing) existing.remove();
+
+    const btn = document.createElement("button");
+    btn.id = "addLinkFallbackBtn";
+    btn.className = "btn-outline";
+    btn.style.marginTop = "8px";
+    btn.textContent = "🔗 リンクとして追加する";
+    btn.addEventListener("click", () => {
+      commitNewTrack({
+        service: "link",
+        sourceId: url,
+        url,
+        title: addTitleInput.value.trim() || (url.split("/").pop() || url),
+        artist: "",
+      });
     });
+    addErrorEl.insertAdjacentElement("afterend", btn);
   }
 
   function commitNewTrack({ service, sourceId, url, title, artist }) {
@@ -312,11 +364,18 @@
     addForm.hidden = true;
     toggleAddFormBtn.classList.remove("active");
     toggleAddFormBtn.textContent = "+ 追加";
+    removeLinkFallbackBtn();
 
     renderAll();
   }
 
+  function removeLinkFallbackBtn() {
+    const existing = $("#addLinkFallbackBtn");
+    if (existing) existing.remove();
+  }
+
   function showAddError(msg) {
+    removeLinkFallbackBtn();
     addErrorEl.textContent = msg;
     addErrorEl.className = "add-error";
     addErrorEl.hidden = false;
@@ -617,7 +676,7 @@
     pp.errorEl.textContent = playerError ? `⚠ ${playerError}` : "";
 
     pp.ytWrap.hidden = !(t && t.service === "youtube");
-    pp.waveformEl.hidden = !(t && t.service === "rss");
+    pp.waveformEl.hidden = !(t && t.service === "direct_audio");
 
     pp.badgeRow.innerHTML = "";
     if (t) pp.badgeRow.appendChild(Services.badgeEl(t.service));
@@ -731,7 +790,7 @@
   function waveformLoop() {
     waveT += 0.12;
     const t = getCurrentTrack();
-    const isPodcastPlaying = t?.service === "rss" && playing;
+    const isPodcastPlaying = t?.service === "direct_audio" && playing;
     [ppDesktop, ppMobile].forEach((pp) => {
       if (pp && !pp.waveformEl.hidden) {
         PlayerPanel.animateWaveform(pp.waveformEl, isPodcastPlaying, waveT);

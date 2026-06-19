@@ -55,7 +55,7 @@
           <button class="btn-primary" id="addTrackBtn">追加</button>
         </div>
         <p class="add-error" id="addError" hidden></p>
-        <p class="add-hint">対応: youtube.com/watch?v=… ・ youtu.be/… ・ podcasts.apple.com/… ・ .mp3 / .ogg / RSSフィード</p>
+        <p class="add-hint">対応: youtube.com/watch?v=… ・ youtu.be/… ・ podcasts.apple.com/… ・ .mp3 / .ogg / 直接のフィードURL（*.rss など任意のPodcastフィード）</p>
       </div>
 
       <div class="track-list" id="trackList">
@@ -201,6 +201,7 @@
 <script src="https://www.youtube.com/iframe_api"></script>
 <script src="js/storage.js"></script>
 <script src="js/services.js"></script>
+<script src="js/podcast-feed-resolver.js"></script>
 <script src="js/apple-podcast-resolver.js"></script>
 <script src="js/youtube-engine.js"></script>
 <script src="js/audio-engine.js"></script>

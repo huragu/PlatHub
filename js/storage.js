@@ -17,7 +17,7 @@ const Storage = (() => {
       url: "https://www.youtube.com/watch?v=4xDzrJKXOOY",
     },
     {
-      id: "s3", service: "rss",
+      id: "s3", service: "direct_audio",
       sourceId: "https://www.w3schools.com/html/horse.mp3",
       title: "Sample Podcast Episode", artist: "Demo Feed",
       url: "https://www.w3schools.com/html/horse.mp3",
