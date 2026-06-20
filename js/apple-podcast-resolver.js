@@ -90,6 +90,82 @@ const ApplePodcastResolver = (() => {
     }
   }
 
+  /**
+   * Resolve EVERY episode of the show that owns the given podcastId.
+   * Used for "番組をまるごと追加" bulk-import from an Apple Podcasts link.
+   *
+   * Apple's own iTunes Lookup API can return many episodes directly
+   * (entity=podcastEpisode&limit=200), which avoids a second network
+   * hop in the common case. If the show has more than 200 episodes,
+   * or the lookup doesn't include episodeUrls for some entries, we
+   * fall back to the show's RSS feed via PodcastFeedResolver.resolveAll,
+   * which has no such limit.
+   *
+   * @param {string} podcastId
+   * @param {{limit?: number}} [opts]
+   * @returns {Promise<{showTitle, episodes: Array, totalCount}>}
+   */
+  async function resolveAllEpisodes(podcastId, opts = {}) {
+    const lookupUrl = `https://itunes.apple.com/lookup?id=${podcastId}&entity=podcastEpisode&limit=200`;
+    let lookupData;
+    try {
+      const res = await fetch(lookupUrl);
+      if (!res.ok) throw new Error(`iTunes API HTTP ${res.status}`);
+      lookupData = await res.json();
+    } catch (e) {
+      throw new ResolveError(
+        "Apple Podcastsの情報取得に失敗しました（iTunes APIに到達できません）",
+        e
+      );
+    }
+
+    if (!lookupData.results || lookupData.results.length === 0) {
+      throw new ResolveError("指定されたPodcastが見つかりませんでした");
+    }
+
+    const showInfo = lookupData.results.find((r) => r.kind === "podcast") || lookupData.results[0];
+    const showTitle = showInfo.collectionName || showInfo.artistName || "Unknown Podcast";
+    const feedUrl = showInfo.feedUrl;
+
+    const episodesFromLookup = lookupData.results
+      .filter((r) => r.episodeUrl)
+      .map((r) => ({
+        audioUrl: r.episodeUrl,
+        title: r.trackName || "Untitled Episode",
+        artist: showTitle,
+        artwork: r.artworkUrl160 || r.artworkUrl60 || null,
+      }));
+
+    // iTunes Lookup is capped at 200 results per call. If we hit that
+    // ceiling exactly, there are likely more episodes than it returned —
+    // prefer the RSS feed instead, which has no such cap.
+    const hitLookupCap = lookupData.results.length >= 200;
+
+    if (episodesFromLookup.length > 0 && !hitLookupCap) {
+      const limited = opts.limit ? episodesFromLookup.slice(0, opts.limit) : episodesFromLookup;
+      return { showTitle, episodes: limited, totalCount: episodesFromLookup.length };
+    }
+
+    if (!feedUrl) {
+      if (episodesFromLookup.length > 0) {
+        // No feed URL to fall back to, but we do have lookup results — use them.
+        const limited = opts.limit ? episodesFromLookup.slice(0, opts.limit) : episodesFromLookup;
+        return { showTitle, episodes: limited, totalCount: episodesFromLookup.length };
+      }
+      throw new ResolveError("このPodcastのRSSフィードURLが取得できませんでした");
+    }
+
+    try {
+      const all = await PodcastFeedResolver.resolveAll(feedUrl, opts);
+      return { ...all, showTitle: all.showTitle || showTitle };
+    } catch (e) {
+      throw new ResolveError(
+        "RSSフィードの取得・解析に失敗しました（配信元がCORSをブロックしている可能性があります）",
+        e
+      );
+    }
+  }
+
   class ResolveError extends Error {
     constructor(message, cause) {
       super(message);
@@ -98,5 +174,5 @@ const ApplePodcastResolver = (() => {
     }
   }
 
-  return { resolve, ResolveError };
+  return { resolve, resolveAllEpisodes, ResolveError };
 })();

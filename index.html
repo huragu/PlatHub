@@ -19,7 +19,10 @@
       <span class="onair-dot"></span>
       <span class="onair-text">ON AIR</span>
     </div>
-    <span class="track-count" id="trackCount">0 tracks</span>
+    <div class="header-right">
+      <button class="btn-outline btn-sm spotify-auth-btn" id="spotifyAuthBtn">Spotifyでログイン</button>
+      <span class="track-count" id="trackCount">0 tracks</span>
+    </div>
   </header>
 
   <!-- ═══ Main (desktop: 3-pane / mobile: single view + tabs) ═══ -->
@@ -51,11 +54,11 @@
       <div class="add-form" id="addForm" hidden>
         <input type="text" id="addTitleInput" placeholder="タイトル（省略可）" class="input">
         <div class="add-form-row">
-          <input type="text" id="addUrlInput" placeholder="YouTube / Apple Podcasts / MP3 URL を貼り付け" class="input">
+          <input type="text" id="addUrlInput" placeholder="YouTube / Spotify / Podcast / MP3 URL を貼り付け" class="input">
           <button class="btn-primary" id="addTrackBtn">追加</button>
         </div>
         <p class="add-error" id="addError" hidden></p>
-        <p class="add-hint">対応: youtube.com/watch?v=… ・ youtu.be/… ・ podcasts.apple.com/… ・ .mp3 / .ogg / 直接のフィードURL（*.rss など任意のPodcastフィード）</p>
+        <p class="add-hint">対応: youtube.com/watch?v=… ・ open.spotify.com/track または playlist/album（要ログイン） ・ podcasts.apple.com/…（番組URLは全話一括追加） ・ .mp3 / .ogg / 直接のフィードURL（一括追加対応）</p>
       </div>
 
       <div class="track-list" id="trackList">
@@ -158,6 +161,37 @@
 
 </div>
 
+<!-- ═══ Bulk import preview modal ═══ -->
+<div class="modal-overlay" id="bulkImportModal" hidden>
+  <div class="modal-box">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="bulkImportTitle">番組名</div>
+        <div class="modal-subtitle" id="bulkImportSubtitle">Podcast ・ 0 件</div>
+      </div>
+      <button class="modal-close-btn" id="bulkImportCloseBtn">✕</button>
+    </div>
+
+    <label class="bulk-import-select-all">
+      <input type="checkbox" id="bulkImportSelectAll" checked>
+      <span>すべて選択 / 解除</span>
+    </label>
+
+    <div class="bulk-import-list" id="bulkImportList"></div>
+
+    <div class="modal-footer">
+      <span class="bulk-import-count" id="bulkImportCount">0 / 0 件を追加</span>
+      <div class="modal-footer-buttons">
+        <button class="btn-outline" id="bulkImportCancelBtn">キャンセル</button>
+        <button class="btn-primary" id="bulkImportAddBtn">追加する</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Toast notification ═══ -->
+<div class="toast" id="toast" hidden></div>
+
 <!-- Player panel template (reused for desktop + mobile via JS) -->
 <template id="playerPanelTemplate">
   <div class="pp-error" hidden></div>
@@ -199,12 +233,16 @@
 </template>
 
 <script src="https://www.youtube.com/iframe_api"></script>
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
 <script src="js/storage.js"></script>
 <script src="js/services.js"></script>
 <script src="js/podcast-feed-resolver.js"></script>
 <script src="js/apple-podcast-resolver.js"></script>
+<script src="js/spotify-auth.js"></script>
+<script src="js/spotify-resolver.js"></script>
 <script src="js/youtube-engine.js"></script>
 <script src="js/audio-engine.js"></script>
+<script src="js/spotify-engine.js"></script>
 <script src="js/player-panel.js"></script>
 <script src="js/app.js"></script>
 

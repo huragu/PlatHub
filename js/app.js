@@ -82,6 +82,23 @@
 
   const tabBtns = $$(".tab-btn");
 
+  // Bulk import preview modal
+  const bulkImportModalEl = $("#bulkImportModal");
+  const bulkImportTitleEl = $("#bulkImportTitle");
+  const bulkImportSubtitleEl = $("#bulkImportSubtitle");
+  const bulkImportSelectAllCheckbox = $("#bulkImportSelectAll");
+  const bulkImportListEl = $("#bulkImportList");
+  const bulkImportCountEl = $("#bulkImportCount");
+  const bulkImportAddBtn = $("#bulkImportAddBtn");
+  const bulkImportCancelBtn = $("#bulkImportCancelBtn");
+  const bulkImportCloseBtn = $("#bulkImportCloseBtn");
+
+  // Toast
+  const toastEl = $("#toast");
+
+  // Spotify auth UI
+  const spotifyAuthBtn = $("#spotifyAuthBtn");
+
   /* ─── Player panel instances ─── */
   let ppDesktop = null;
   let ppMobile = null;
@@ -117,12 +134,14 @@
     if (!t) return null;
     if (t.service === "youtube") return "youtube";
     if (t.service === "direct_audio") return "audio";
+    if (t.service === "spotify_track") return "spotify";
     return null;
   }
 
   function stopAllEngines() {
     YouTubeEngine.pause();
     AudioEngine.pause();
+    if (SpotifyEngine.isReady) SpotifyEngine.pause();
   }
 
   /**
@@ -138,12 +157,23 @@
 
     if (t.service === "youtube") {
       AudioEngine.pause();
+      if (SpotifyEngine.isReady) SpotifyEngine.pause();
       if (ytHostEl) {
         YouTubeEngine.load(ytHostEl, t.sourceId, volume, playing);
       }
     } else if (t.service === "direct_audio") {
       YouTubeEngine.destroy();
+      if (SpotifyEngine.isReady) SpotifyEngine.pause();
       AudioEngine.load(t.sourceId, volume, playing);
+    } else if (t.service === "spotify_track") {
+      YouTubeEngine.destroy();
+      AudioEngine.pause();
+      if (!SpotifyAuth.isLoggedIn()) {
+        playerError = "Spotifyにログインしていません。ヘッダーの「Spotifyでログイン」から認証してください";
+        renderPlayerPanels();
+        return;
+      }
+      SpotifyEngine.load(t.sourceId, volume, playing);
     }
   }
 
@@ -161,15 +191,28 @@
     if (activeEngine() === "audio") { duration = dur; renderTransport(); }
   });
 
-  /* YouTube position polling (YT API has no timeupdate event) */
+  SpotifyEngine.onEnded(() => handleTrackEnded());
+  SpotifyEngine.onError((msg) => { playerError = msg; renderPlayerPanels(); });
+  SpotifyEngine.onNotPremium(() => { renderSpotifyAuthUI(); });
+
+  /* Position polling — both YouTube and Spotify SDKs require polling
+     (neither fires a native timeupdate-style event). */
   let ytPollTimer = null;
   function startYtPoll() {
     clearInterval(ytPollTimer);
     ytPollTimer = setInterval(() => {
-      if (activeEngine() === "youtube" && playing) {
+      const engine = activeEngine();
+      if (engine === "youtube" && playing) {
         position = YouTubeEngine.getCurrentTime();
         duration = YouTubeEngine.getDuration() || duration;
         renderTransport();
+      } else if (engine === "spotify" && playing) {
+        Promise.all([SpotifyEngine.getCurrentTime(), SpotifyEngine.getDuration()]).then(([pos, dur]) => {
+          position = pos;
+          duration = dur || duration;
+          renderTransport();
+        });
+        SpotifyEngine.pollForEnd();
       }
     }, 500);
   }
@@ -195,10 +238,13 @@
   function togglePlayPause() {
     if (!getCurrentTrack()) return;
     playing = !playing;
-    if (activeEngine() === "youtube") {
+    const engine = activeEngine();
+    if (engine === "youtube") {
       playing ? YouTubeEngine.play() : YouTubeEngine.pause();
-    } else if (activeEngine() === "audio") {
+    } else if (engine === "audio") {
       playing ? AudioEngine.play() : AudioEngine.pause();
+    } else if (engine === "spotify") {
+      playing ? SpotifyEngine.play() : SpotifyEngine.pause();
     }
     renderTransport();
   }
@@ -231,8 +277,10 @@
 
   function seekTo(sec) {
     if (!isFinite(sec) || sec < 0) return;
-    if (activeEngine() === "youtube") YouTubeEngine.seekTo(sec);
-    else if (activeEngine() === "audio") AudioEngine.seekTo(sec);
+    const engine = activeEngine();
+    if (engine === "youtube") YouTubeEngine.seekTo(sec);
+    else if (engine === "audio") AudioEngine.seekTo(sec);
+    else if (engine === "spotify") SpotifyEngine.seekTo(sec);
     position = sec;
     renderTransport();
   }
@@ -241,6 +289,7 @@
     volume = Math.max(0, Math.min(1, v));
     YouTubeEngine.setVolume(volume);
     AudioEngine.setVolume(volume);
+    if (SpotifyEngine.isReady) SpotifyEngine.setVolume(volume);
     renderVolumeUI();
   }
 
@@ -268,9 +317,89 @@
       return;
     }
 
+    if (service === "spotify_track") {
+      if (!SpotifyAuth.isLoggedIn()) { showAddError("先にヘッダーの「Spotifyでログイン」から認証してください"); return; }
+      const id = Services.extractSpotifyTrackId(url);
+      if (!id) { showAddError("SpotifyのトラックURLを確認してください"); return; }
+
+      setAddTrackLoading(true, "Spotifyからトラック情報を取得中…");
+      try {
+        const track = await SpotifyResolver.resolveTrack(id);
+        commitNewTrack({
+          service: "spotify_track",
+          sourceId: track.trackId,
+          url,
+          title: addTitleInput.value.trim() || track.title,
+          artist: track.artist || "",
+        });
+      } catch (e) {
+        showAddError(e.message || "Spotifyトラックの取得に失敗しました");
+      } finally {
+        setAddTrackLoading(false);
+      }
+      return;
+    }
+
+    if (service === "spotify_collection") {
+      if (!SpotifyAuth.isLoggedIn()) { showAddError("先にヘッダーの「Spotifyでログイン」から認証してください"); return; }
+      const parsed = SpotifyResolver.parseUrl(url);
+      if (!parsed) { showAddError("SpotifyのプレイリストURLを確認してください"); return; }
+
+      setAddTrackLoading(true, "Spotifyからリストを取得中…");
+      try {
+        const result = parsed.type === "playlist"
+          ? await SpotifyResolver.resolvePlaylist(parsed.id)
+          : await SpotifyResolver.resolveAlbum(parsed.id);
+        setAddTrackLoading(false);
+        openBulkImportPreview({
+          collectionName: result.collectionName,
+          serviceLabel: "Spotify",
+          sourceUrl: url,
+          items: result.tracks.map((t) => ({
+            service: "spotify_track",
+            sourceId: t.trackId,
+            url: `https://open.spotify.com/track/${t.trackId}`,
+            title: t.title,
+            artist: t.artist,
+          })),
+        });
+      } catch (e) {
+        setAddTrackLoading(false);
+        showAddError(e.message || "Spotifyリストの取得に失敗しました");
+      }
+      return;
+    }
+
     if (service === "apple_podcast") {
       const ids = Services.extractApplePodcastIds(url);
       if (!ids) { showAddError("Apple PodcastsのURLを確認してください"); return; }
+
+      // No episode ID in the URL => this is a show-level link, not a
+      // single-episode link. Offer the bulk "番組をまるごと追加" flow
+      // instead of silently grabbing just the latest episode.
+      if (!ids.episodeId) {
+        setAddTrackLoading(true, "Apple Podcastsから番組情報を取得中…");
+        try {
+          const result = await ApplePodcastResolver.resolveAllEpisodes(ids.podcastId);
+          setAddTrackLoading(false);
+          openBulkImportPreview({
+            collectionName: result.showTitle,
+            serviceLabel: "Podcast",
+            sourceUrl: url,
+            items: result.episodes.map((ep) => ({
+              service: "direct_audio",
+              sourceId: ep.audioUrl,
+              url: ep.audioUrl,
+              title: ep.title,
+              artist: ep.artist,
+            })),
+          });
+        } catch (e) {
+          setAddTrackLoading(false);
+          showAddError(e.message || "Apple Podcastsの取得に失敗しました");
+        }
+        return;
+      }
 
       setAddTrackLoading(true, "Apple Podcastsからエピソードを検索中…");
       try {
@@ -305,26 +434,30 @@
     // service === "podcast_feed" — anything not recognized above.
     // Covers Omny (*.omnycontent.com/.../podcast.rss), Buzzsprout,
     // Libsyn, Anchor/Spotify-for-Podcasters, self-hosted RSS, etc.
-    // We attempt to fetch+parse it as an RSS/Atom feed; if that fails,
-    // we offer to add it as a plain link instead.
+    // A feed URL always represents an entire show, so we always offer
+    // the bulk-import preview rather than silently grabbing one episode.
     setAddTrackLoading(true, "フィードを取得中…");
     try {
-      const resolved = await PodcastFeedResolver.resolve(url);
-      commitNewTrack({
-        service: "direct_audio",
-        sourceId: resolved.audioUrl,
-        url,
-        title: addTitleInput.value.trim() || resolved.title,
-        artist: resolved.artist || "",
+      const result = await PodcastFeedResolver.resolveAll(url);
+      setAddTrackLoading(false);
+      openBulkImportPreview({
+        collectionName: result.showTitle,
+        serviceLabel: "Podcast",
+        sourceUrl: url,
+        items: result.episodes.map((ep) => ({
+          service: "direct_audio",
+          sourceId: ep.audioUrl,
+          url: ep.audioUrl,
+          title: ep.title,
+          artist: ep.artist,
+        })),
       });
-      if (resolved.note) showAddInfo(resolved.note);
     } catch (e) {
+      setAddTrackLoading(false);
       showAddError(
         (e.message || "フィードの解析に失敗しました") + "　— 「リンクとして追加」も選べます"
       );
       offerLinkFallback(url);
-    } finally {
-      setAddTrackLoading(false);
     }
   }
 
@@ -351,6 +484,135 @@
       });
     });
     addErrorEl.insertAdjacentElement("afterend", btn);
+  }
+
+  /* ════════════════════════════════════════════
+     Bulk import preview modal
+     Used for: Spotify playlists/albums, Apple Podcasts shows,
+     and any podcast RSS/Atom feed — anywhere a single pasted
+     URL can expand into many tracks at once.
+  ════════════════════════════════════════════ */
+
+  let bulkImportState = null; // { collectionName, serviceLabel, sourceUrl, items, selected: Set<number> }
+
+  function openBulkImportPreview({ collectionName, serviceLabel, sourceUrl, items }) {
+    bulkImportState = {
+      collectionName, serviceLabel, sourceUrl, items,
+      selected: new Set(items.map((_, i) => i)), // all selected by default
+    };
+    renderBulkImportModal();
+    bulkImportModalEl.hidden = false;
+
+    // The add-form's job is done; the modal takes over from here.
+    addUrlInput.value = "";
+    addTitleInput.value = "";
+    addForm.hidden = true;
+    toggleAddFormBtn.classList.remove("active");
+    toggleAddFormBtn.textContent = "+ 追加";
+    removeLinkFallbackBtn();
+  }
+
+  function closeBulkImportModal() {
+    bulkImportModalEl.hidden = true;
+    bulkImportState = null;
+  }
+
+  function renderBulkImportModal() {
+    if (!bulkImportState) return;
+    const { collectionName, serviceLabel, items, selected } = bulkImportState;
+
+    bulkImportTitleEl.textContent = collectionName;
+    bulkImportSubtitleEl.textContent = `${serviceLabel} ・ ${items.length} 件のトラックが見つかりました`;
+    bulkImportSelectAllCheckbox.checked = selected.size === items.length;
+    bulkImportCountEl.textContent = `${selected.size} / ${items.length} 件を追加`;
+    bulkImportAddBtn.disabled = selected.size === 0;
+
+    bulkImportListEl.innerHTML = "";
+    items.forEach((item, i) => {
+      const row = document.createElement("label");
+      row.className = "bulk-import-row";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = selected.has(i);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) selected.add(i); else selected.delete(i);
+        renderBulkImportModal();
+      });
+
+      const num = document.createElement("span");
+      num.className = "bulk-import-num";
+      num.textContent = i + 1;
+
+      const meta = document.createElement("div");
+      meta.className = "bulk-import-meta";
+      const titleEl = document.createElement("div");
+      titleEl.className = "bulk-import-title";
+      titleEl.textContent = item.title;
+      meta.appendChild(titleEl);
+      if (item.artist) {
+        const artistEl = document.createElement("div");
+        artistEl.className = "bulk-import-artist";
+        artistEl.textContent = item.artist;
+        meta.appendChild(artistEl);
+      }
+
+      row.appendChild(checkbox);
+      row.appendChild(num);
+      row.appendChild(meta);
+      bulkImportListEl.appendChild(row);
+    });
+  }
+
+  function toggleBulkImportSelectAll() {
+    if (!bulkImportState) return;
+    const { items, selected } = bulkImportState;
+    if (selected.size === items.length) {
+      selected.clear();
+    } else {
+      items.forEach((_, i) => selected.add(i));
+    }
+    renderBulkImportModal();
+  }
+
+  function commitBulkImport() {
+    if (!bulkImportState) return;
+    const { items, selected } = bulkImportState;
+    const pl = getActivePlaylist();
+    const toAdd = items.filter((_, i) => selected.has(i));
+
+    toAdd.forEach((item) => {
+      pl.tracks.push({
+        id: `t${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        title: item.title,
+        artist: item.artist || "",
+        service: item.service,
+        sourceId: item.sourceId,
+        url: item.url,
+      });
+    });
+    persist();
+    closeBulkImportModal();
+    removeLinkFallbackBtn();
+    renderAll();
+    showToast(`${toAdd.length} 件のトラックを追加しました`);
+  }
+
+  /**
+   * Brief, self-dismissing notification — used for confirmations that
+   * happen after the add-form has already been closed (e.g. bulk import),
+   * where the inline #addError banner inside the form isn't visible.
+   */
+  let toastTimer = null;
+  function showToast(message) {
+    clearTimeout(toastTimer);
+    toastEl.textContent = message;
+    toastEl.hidden = false;
+    requestAnimationFrame(() => toastEl.classList.add("visible"));
+    toastTimer = setTimeout(() => {
+      toastEl.classList.remove("visible");
+      setTimeout(() => { toastEl.hidden = true; }, 250);
+    }, 3000);
   }
 
   function commitNewTrack({ service, sourceId, url, title, artist }) {
@@ -493,6 +755,7 @@
     renderRadioUI();
     renderVolumeUI();
     renderOnAir();
+    renderSpotifyAuthUI();
   }
 
   function renderHeader() {
@@ -783,6 +1046,23 @@
     [ppDesktop, ppMobile].forEach((pp) => { if (pp) pp.volumeSlider.value = volume; });
   }
 
+  function renderSpotifyAuthUI() {
+    if (!spotifyAuthBtn) return;
+    if (!SpotifyAuth.isConfigured()) {
+      spotifyAuthBtn.textContent = "Spotify未設定";
+      spotifyAuthBtn.disabled = true;
+      spotifyAuthBtn.title = "js/spotify-auth.js に Client ID を設定してください";
+      return;
+    }
+    if (SpotifyAuth.isLoggedIn()) {
+      spotifyAuthBtn.textContent = "🟢 Spotify連携中";
+      spotifyAuthBtn.classList.add("connected");
+    } else {
+      spotifyAuthBtn.textContent = "Spotifyでログイン";
+      spotifyAuthBtn.classList.remove("connected");
+    }
+  }
+
   /* ════════════════════════════════════════════
      Waveform animation loop (only while a podcast plays)
   ════════════════════════════════════════════ */
@@ -870,6 +1150,35 @@
     btn.addEventListener("click", () => setMobileTab(btn.dataset.tab));
   });
 
+  if (spotifyAuthBtn) {
+    spotifyAuthBtn.addEventListener("click", async () => {
+      if (SpotifyAuth.isLoggedIn()) {
+        SpotifyEngine.disconnect();
+        SpotifyAuth.logout();
+        renderSpotifyAuthUI();
+        showToast("Spotifyからログアウトしました");
+        return;
+      }
+      try {
+        await SpotifyAuth.login();
+      } catch (e) {
+        showToast(e.message || "Spotifyログインを開始できませんでした");
+      }
+    });
+  }
+
+  if (bulkImportSelectAllCheckbox) {
+    bulkImportSelectAllCheckbox.addEventListener("change", toggleBulkImportSelectAll);
+  }
+  if (bulkImportAddBtn) bulkImportAddBtn.addEventListener("click", commitBulkImport);
+  if (bulkImportCancelBtn) bulkImportCancelBtn.addEventListener("click", closeBulkImportModal);
+  if (bulkImportCloseBtn) bulkImportCloseBtn.addEventListener("click", closeBulkImportModal);
+  if (bulkImportModalEl) {
+    bulkImportModalEl.addEventListener("click", (e) => {
+      if (e.target === bulkImportModalEl) closeBulkImportModal();
+    });
+  }
+
   window.addEventListener("resize", () => {
     // Re-evaluate which YT host should be "live" when crossing
     // the mobile/desktop breakpoint, since the visible container
@@ -890,6 +1199,14 @@
     ensureDesktopPanelMounted();
     setMobileTab("tracks");
     renderAll();
+
+    // If the user is already logged into Spotify from a previous
+    // session (token still valid in sessionStorage), warm up the
+    // Web Playback SDK in the background so playback starts faster
+    // on the first click.
+    if (SpotifyAuth.isLoggedIn()) {
+      SpotifyEngine.init().catch(() => {});
+    }
   }
 
   init();

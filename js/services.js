@@ -4,11 +4,13 @@
 
 const Services = (() => {
   const META = {
-    youtube:        { label: "YouTube",  cssClass: "badge-youtube" },
-    direct_audio:   { label: "Podcast",  cssClass: "badge-rss" },
-    podcast_feed:   { label: "Podcast",  cssClass: "badge-rss" }, // RSS feed -> resolved to direct_audio
-    apple_podcast:  { label: "Podcast",  cssClass: "badge-rss" }, // resolves via iTunes Lookup -> RSS
-    link:           { label: "Link",     cssClass: "badge-link" },
+    youtube:           { label: "YouTube",  cssClass: "badge-youtube" },
+    spotify_track:     { label: "Spotify",  cssClass: "badge-spotify" },
+    spotify_collection:{ label: "Spotify",  cssClass: "badge-spotify" }, // never stored; bulk-imported as spotify_track entries
+    direct_audio:      { label: "Podcast",  cssClass: "badge-rss" },
+    podcast_feed:      { label: "Podcast",  cssClass: "badge-rss" }, // RSS feed -> resolved to direct_audio
+    apple_podcast:     { label: "Podcast",  cssClass: "badge-rss" }, // resolves via iTunes Lookup -> RSS
+    link:              { label: "Link",     cssClass: "badge-link" },
   };
 
   /**
@@ -16,19 +18,26 @@ const Services = (() => {
    *
    * Order matters: most specific first.
    *   1. YouTube           -> play directly via IFrame API
-   *   2. Apple Podcasts    -> resolve via iTunes Lookup API
-   *   3. Direct audio file -> play directly via <audio>
-   *   4. Anything else     -> try as a podcast/RSS feed URL.
+   *   2. Spotify track     -> play directly via Web Playback SDK
+   *      (Spotify playlist/album URLs are NOT handled here — they
+   *      go through the dedicated "番組/リストをまるごと追加" bulk
+   *      flow in app.js, since a single Track row can only represent
+   *      one playable item, not a collection.)
+   *   3. Apple Podcasts    -> resolve via iTunes Lookup API
+   *   4. Direct audio file -> play directly via <audio>
+   *   5. Anything else     -> try as a podcast/RSS feed URL.
    *      This is deliberately broad: Omny (*.omnycontent.com/.../podcast.rss),
-   *      Spotify show pages, Anchor, Buzzsprout, Libsyn, self-hosted feeds,
-   *      etc. all end up here. We don't try to enumerate every podcast
-   *      host by domain name (an endless, fragile list) — instead we
-   *      attempt to fetch+parse the URL as RSS/Atom XML when the track is
-   *      added, and only fall back to a plain "link" if that fails.
+   *      Anchor, Buzzsprout, Libsyn, self-hosted feeds, etc. all end up
+   *      here. We don't try to enumerate every podcast host by domain
+   *      name (an endless, fragile list) — instead we attempt to
+   *      fetch+parse the URL as RSS/Atom XML when the track is added,
+   *      and only fall back to a plain "link" if that fails.
    */
   function detect(url) {
     if (!url) return "link";
     if (/youtube\.com\/watch|youtu\.be\//.test(url)) return "youtube";
+    if (/open\.spotify\.com\/track\/|spotify:track:/.test(url)) return "spotify_track";
+    if (/open\.spotify\.com\/(playlist|album)\/|spotify:(playlist|album):/.test(url)) return "spotify_collection";
     if (/podcasts\.apple\.com\/.+\/podcast\//.test(url)) return "apple_podcast";
     if (isDirectAudioUrl(url)) return "direct_audio";
     return "podcast_feed";
@@ -61,6 +70,15 @@ const Services = (() => {
     };
   }
 
+  /**
+   * Extract a Spotify track ID from a track URL/URI.
+   * For playlist/album URLs, use SpotifyResolver.parseUrl instead.
+   */
+  function extractSpotifyTrackId(url) {
+    const m = url.match(/open\.spotify\.com\/track\/([A-Za-z0-9]+)|spotify:track:([A-Za-z0-9]+)/);
+    return m ? (m[1] || m[2]) : null;
+  }
+
   function badgeHTML(service) {
     const meta = META[service] || META.link;
     return `<span class="badge ${meta.cssClass}">${meta.label}</span>`;
@@ -82,7 +100,7 @@ const Services = (() => {
   }
 
   return {
-    detect, isDirectAudioUrl, extractYouTubeId, extractApplePodcastIds,
+    detect, isDirectAudioUrl, extractYouTubeId, extractApplePodcastIds, extractSpotifyTrackId,
     badgeHTML, badgeEl, formatTime, META,
   };
 })();

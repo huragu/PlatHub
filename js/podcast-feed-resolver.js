@@ -7,6 +7,11 @@
      Libsyn, Anchor/Spotify-for-Podcasters, self-hosted feeds, etc.)
    - Atom feeds (rare for podcasts, but some hosts emit them)
 
+   Two entry points:
+   - resolve(url)     -> latest single episode (used by "+ 追加")
+   - resolveAll(url)  -> every episode in the feed (used by the
+                          "番組をまるごと追加" bulk-import feature)
+
    Strategy:
    1. Fetch the URL as text.
    2. Parse as XML. If it's not parseable XML at all, the URL
@@ -15,9 +20,6 @@
    3. RSS 2.0: look for <item><enclosure url="...">.
       Atom:    look for <entry><link rel="enclosure" href="...">
                or <link type="audio/*">.
-   4. If the feed URL itself contains a fragment/query hinting at
-      a specific episode (rare, but some hosts do this), prefer
-      that episode; otherwise default to the first (latest) item.
 
    This module is also reused by apple-podcast-resolver.js for
    its own RSS-fallback step, so feed-parsing logic lives in
@@ -35,11 +37,23 @@ const PodcastFeedResolver = (() => {
   }
 
   /**
-   * Fetch + parse a feed URL, returning the playable episode.
+   * Fetch + parse a feed URL, returning only the latest playable episode.
    * @param {string} feedUrl
    * @returns {Promise<{audioUrl, title, artist, artwork, note}>}
    */
   async function resolve(feedUrl) {
+    const all = await resolveAll(feedUrl, { limit: 1 });
+    return { ...all.episodes[0], note: all.episodes.length > 0 && all.totalCount > 1 ? "フィード内の最新エピソードを追加しました" : null };
+  }
+
+  /**
+   * Fetch + parse a feed URL, returning ALL playable episodes.
+   * Used for the "番組をまるごと追加" (add entire show) bulk-import feature.
+   * @param {string} feedUrl
+   * @param {{limit?: number}} [opts] - optional cap on episode count (newest-first)
+   * @returns {Promise<{showTitle, episodes: Array<{audioUrl,title,artist,artwork}>, totalCount}>}
+   */
+  async function resolveAll(feedUrl, opts = {}) {
     const xmlText = await fetchText(feedUrl);
     const doc = parseXml(xmlText);
     const root = doc.documentElement;
@@ -50,10 +64,10 @@ const PodcastFeedResolver = (() => {
 
     const tag = root.tagName.toLowerCase();
     if (tag === "rss" || root.querySelector("channel")) {
-      return resolveRss2(doc, feedUrl);
+      return extractAllRss2(doc, opts);
     }
     if (tag === "feed") {
-      return resolveAtom(doc, feedUrl);
+      return extractAllAtom(doc, opts);
     }
     throw new ResolveError("未対応のフィード形式です（RSS 2.0 / Atom のみ対応）");
   }
@@ -87,8 +101,8 @@ const PodcastFeedResolver = (() => {
     return doc;
   }
 
-  /* ── RSS 2.0 ── */
-  function resolveRss2(doc, feedUrl) {
+  /* ── RSS 2.0: extract all episodes ── */
+  function extractAllRss2(doc, opts) {
     const channel = doc.querySelector("channel");
     const showTitle = textOf(channel, "title") || "Podcast";
     const items = Array.from(doc.querySelectorAll("item"));
@@ -96,56 +110,58 @@ const PodcastFeedResolver = (() => {
       throw new ResolveError("このフィードにエピソードが見つかりませんでした");
     }
 
-    // Default: most recent episode (RSS convention = newest first).
-    const item = items[0];
-    const enclosure = item.querySelector("enclosure[url]");
-    const audioUrl = enclosure?.getAttribute("url");
-
-    if (!audioUrl) {
-      throw new ResolveError("エピソードの音声URL（enclosure）が見つかりませんでした");
+    const limited = opts.limit ? items.slice(0, opts.limit) : items;
+    const episodes = [];
+    for (const item of limited) {
+      const enclosure = item.querySelector("enclosure[url]");
+      const audioUrl = enclosure?.getAttribute("url");
+      if (!audioUrl) continue; // skip episodes without playable audio (rare, but happens)
+      episodes.push({
+        audioUrl,
+        title: textOf(item, "title") || "Untitled Episode",
+        artist: showTitle,
+        artwork: findArtwork(channel, item),
+      });
     }
 
-    const episodeTitle = textOf(item, "title") || "Untitled Episode";
-    const artwork = findArtwork(channel, item);
+    if (episodes.length === 0) {
+      throw new ResolveError("再生可能なエピソード（enclosure付き）が見つかりませんでした");
+    }
 
-    return {
-      audioUrl,
-      title: episodeTitle,
-      artist: showTitle,
-      artwork,
-      note: items.length > 1 ? "フィード内の最新エピソードを追加しました" : null,
-    };
+    return { showTitle, episodes, totalCount: items.length };
   }
 
-  /* ── Atom (rare for podcasts, but handled for completeness) ── */
-  function resolveAtom(doc, feedUrl) {
+  /* ── Atom: extract all episodes ── */
+  function extractAllAtom(doc, opts) {
     const feedTitle = textOf(doc, "feed > title") || "Podcast";
     const entries = Array.from(doc.querySelectorAll("entry"));
     if (entries.length === 0) {
       throw new ResolveError("このフィードにエピソードが見つかりませんでした");
     }
 
-    const entry = entries[0];
-    const audioLink =
-      entry.querySelector('link[rel="enclosure"]') ||
-      Array.from(entry.querySelectorAll("link")).find((l) =>
-        (l.getAttribute("type") || "").startsWith("audio/")
-      );
-    const audioUrl = audioLink?.getAttribute("href");
-
-    if (!audioUrl) {
-      throw new ResolveError("このAtomフィードに音声リンクが見つかりませんでした");
+    const limited = opts.limit ? entries.slice(0, opts.limit) : entries;
+    const episodes = [];
+    for (const entry of limited) {
+      const audioLink =
+        entry.querySelector('link[rel="enclosure"]') ||
+        Array.from(entry.querySelectorAll("link")).find((l) =>
+          (l.getAttribute("type") || "").startsWith("audio/")
+        );
+      const audioUrl = audioLink?.getAttribute("href");
+      if (!audioUrl) continue;
+      episodes.push({
+        audioUrl,
+        title: textOf(entry, "title") || "Untitled Episode",
+        artist: feedTitle,
+        artwork: null,
+      });
     }
 
-    const episodeTitle = textOf(entry, "title") || "Untitled Episode";
+    if (episodes.length === 0) {
+      throw new ResolveError("再生可能なエピソード（音声リンク付き）が見つかりませんでした");
+    }
 
-    return {
-      audioUrl,
-      title: episodeTitle,
-      artist: feedTitle,
-      artwork: null,
-      note: entries.length > 1 ? "フィード内の最新エピソードを追加しました" : null,
-    };
+    return { showTitle: feedTitle, episodes, totalCount: entries.length };
   }
 
   /* ── helpers ── */
@@ -171,5 +187,5 @@ const PodcastFeedResolver = (() => {
     return null;
   }
 
-  return { resolve, ResolveError };
+  return { resolve, resolveAll, ResolveError };
 })();
