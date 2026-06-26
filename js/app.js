@@ -206,8 +206,10 @@
   SpotifyEngine.onError((msg) => { playerError = msg; renderPlayerPanels(); });
   SpotifyEngine.onNotPremium(() => { renderSpotifyAuthUI(); });
 
-  /* Position polling — both YouTube and Spotify SDKs require polling
-     (neither fires a native timeupdate-style event). */
+  /* Position polling — used to update the progress bar UI.
+     YouTube has no timeupdate event, so we poll.
+     Spotify end-detection is handled in player_state_changed (event-driven,
+     works in background tabs). We still poll here for the progress bar. */
   let ytPollTimer = null;
   function startYtPoll() {
     clearInterval(ytPollTimer);
@@ -218,12 +220,12 @@
         duration = YouTubeEngine.getDuration() || duration;
         renderTransport();
       } else if (engine === "spotify" && playing) {
-        Promise.all([SpotifyEngine.getCurrentTime(), SpotifyEngine.getDuration()]).then(([pos, dur]) => {
-          position = pos;
-          duration = dur || duration;
+        SpotifyEngine.pollForProgress().then((s) => {
+          if (!s) return;
+          position = s.position;
+          duration = s.duration || duration;
           renderTransport();
         });
-        SpotifyEngine.pollForEnd();
       }
     }, 500);
   }

@@ -82,6 +82,9 @@ const SpotifyEngine = (() => {
     player.addListener("player_state_changed", (state) => {
       if (!state) return;
       lastKnownState = state;
+      // End-detection runs here — not in a polling timer — so it fires
+      // even when the tab is backgrounded and JS timers are throttled.
+      checkStateForEnd(state);
     });
 
     await player.connect();
@@ -160,36 +163,30 @@ const SpotifyEngine = (() => {
   }
 
   /**
-   * Track-end detection for Spotify Web Playback SDK.
+   * Track-end detection state.
    *
-   * The SDK has no clean "ended" event (open issue since 2018, still
-   * unfixed in 2025). The most reliable documented pattern is:
+   * The SDK has no clean "ended" event, so we infer it from
+   * player_state_changed. Crucially, player_state_changed fires
+   * via the SDK's internal WebSocket connection, NOT via JS timers,
+   * so it works reliably even when the tab is in the background
+   * (where setInterval/setTimeout are heavily throttled by browsers).
    *
-   *   1. Immediately before ending, state.paused === false AND
-   *      state.position is close to state.duration.
-   *   2. On end: state.paused === true AND state.position === 0.
-   *      The current_track URI in track_window stays the same.
-   *   3. Shortly after: a second paused+position=0 event fires.
+   * Detection pattern (documented in Spotify SDK issues #35 and #85):
+   *   - While playing: paused=false, position>0
+   *   - At end:        paused=true,  position≈0, same track URI
+   *   - Then again:    paused=true,  position≈0  (second fire, ignored by endFired)
    *
-   * We detect "step 2" by watching for paused=true + position<500ms
-   * AND we know we were previously playing (prevPlaying flag), AND
-   * the current track URI hasn't changed to a new song (which would
-   * mean the user skipped, not that the track naturally ended).
-   *
-   * endFired guards against the double-fire from the two events.
+   * We detect the first "paused+position<500ms" event that arrives
+   * AFTER we were in a playing state (prevPlaying=true).
    */
   let prevPlaying = false;
   let currentTrackUri = null;
 
-  async function pollForEnd() {
-    if (!player || endFired) return;
-    const state = await player.getCurrentState().catch(() => null);
-    if (!state) return;
+  function checkStateForEnd(state) {
+    if (!state || endFired) return;
 
     const trackUri = state.track_window?.current_track?.uri || null;
 
-    // Detect natural end: we were playing, now paused at position ≈ 0,
-    // and the track URI is still the one we started (not a user-initiated skip).
     if (
       prevPlaying &&
       state.paused &&
@@ -202,14 +199,29 @@ const SpotifyEngine = (() => {
       return;
     }
 
-    // Update tracking state.
     prevPlaying = !state.paused;
+
+    // Track changed externally (skip in Spotify app, etc.) — reset guards.
     if (trackUri && trackUri !== currentTrackUri) {
-      // Track changed externally (user skipped in Spotify app, etc.) —
-      // reset end-detection state but don't fire onEnded.
       currentTrackUri = trackUri;
       endFired = false;
     }
+  }
+
+  /**
+   * Called from the 500ms poll loop in app.js — used only for
+   * updating the progress bar (position/duration). End detection
+   * now lives in player_state_changed so it works in background tabs.
+   */
+  async function pollForProgress() {
+    if (!player) return;
+    const state = await player.getCurrentState().catch(() => null);
+    if (!state) return;
+    return {
+      position: state.position / 1000,
+      duration: state.duration / 1000,
+      paused:   state.paused,
+    };
   }
 
   function disconnect() {
@@ -225,7 +237,7 @@ const SpotifyEngine = (() => {
 
   return {
     init, load, play, pause, seekTo, setVolume,
-    getCurrentTime, getDuration, disconnect, pollForEnd,
+    getCurrentTime, getDuration, disconnect, pollForProgress,
     onEnded, onReady, onError, onNotPremium,
     get isReady() { return ready; },
   };
