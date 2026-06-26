@@ -463,6 +463,13 @@ input::placeholder { color: var(--text-ghost); }
   flex-shrink: 0;
 }
 .ctrl-btn:hover { color: #fff; }
+.ctrl-btn.mode-btn {
+  font-size: 14px;
+  color: #555;
+}
+.ctrl-btn.mode-btn.active { color: var(--red); }
+.ctrl-btn.mode-btn:hover { color: #ccc; }
+.ctrl-btn.mode-btn.active:hover { color: var(--red); opacity: 0.85; }
 
 .play-btn {
   background: var(--red);

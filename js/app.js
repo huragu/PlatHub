@@ -7,15 +7,21 @@
 
   /* ─── State ─── */
   let state = Storage.load();
+  const _prefs = Storage.loadPrefs();
   let mobileTab = "tracks"; // "playlists" | "tracks" | "player"
 
   let currentTrackId = null;
   let playing = false;
-  let volume = 0.8;
+  let volume = _prefs.volume;
+  let shuffleMode = _prefs.shuffle;
+  let repeatMode = _prefs.repeat; // "none" | "one" | "all"
   let radioMode = false;
   let position = 0;
   let duration = 0;
   let playerError = "";
+
+  // Shuffle order cache — rebuilt when shuffle is toggled or playlist changes
+  let shuffleQueue = [];
 
   let waveformTimer = null;
 
@@ -78,6 +84,8 @@
   const dbProgressFill = $("#dbProgressFill");
   const dbProgressHandle = $("#dbProgressHandle");
   const dbRadioBtn = $("#dbRadioBtn");
+  const dbShuffleBtn = $("#dbShuffleBtn");
+  const dbRepeatBtn = $("#dbRepeatBtn");
   const dbVolumeSlider = $("#dbVolumeSlider");
 
   const tabBtns = $$(".tab-btn");
@@ -120,6 +128,9 @@
   }
   function persist() {
     Storage.save(state);
+  }
+  function persistPlayerPrefs() {
+    Storage.savePrefs({ volume, shuffle: shuffleMode, repeat: repeatMode });
   }
 
   /* ════════════════════════════════════════════
@@ -249,23 +260,70 @@
     renderTransport();
   }
 
-  function skipPrev() {
-    const idx = getCurrentIndex();
+  /* ── Shuffle queue ──────────────────────────────────────── */
+  function buildShuffleQueue() {
     const tracks = getTracks();
-    if (idx > 0) playTrack(tracks[idx - 1]);
+    const ids = tracks.map((t) => t.id);
+    // Fisher-Yates shuffle, keeping currentTrackId first
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    // Move currentTrackId to front if present
+    const ci = ids.indexOf(currentTrackId);
+    if (ci > 0) { ids.splice(ci, 1); ids.unshift(currentTrackId); }
+    shuffleQueue = ids;
+  }
+
+  function nextTrack(forceNext = false) {
+    const tracks = getTracks();
+    if (!tracks.length) return null;
+
+    // 1曲リピート（forceNext=trueは⏭ボタンで明示的にスキップ）
+    if (repeatMode === "one" && !forceNext) return getCurrentTrack() || null;
+
+    if (shuffleMode) {
+      if (!shuffleQueue.length) buildShuffleQueue();
+      const ci = shuffleQueue.indexOf(currentTrackId);
+      const ni = (ci + 1) % shuffleQueue.length;
+      const nextId = shuffleQueue[ni];
+      // リピートなし+最後まで行ったら止まる
+      if (!radioMode && repeatMode === "none" && ci === shuffleQueue.length - 1) return null;
+      return tracks.find((t) => t.id === nextId) || null;
+    }
+
+    const idx = getCurrentIndex();
+    const next = tracks[idx + 1] || null;
+    if (next) return next;
+    if (radioMode || repeatMode === "all") return tracks[0];
+    return null;
+  }
+
+  function skipPrev() {
+    // ⏮ボタン: 再生位置が3秒超なら先頭へ戻す、3秒以内なら前のトラックへ
+    if (position > 3) {
+      seekTo(0);
+      return;
+    }
+    const tracks = getTracks();
+    if (shuffleMode && shuffleQueue.length) {
+      const ci = shuffleQueue.indexOf(currentTrackId);
+      const pi = (ci - 1 + shuffleQueue.length) % shuffleQueue.length;
+      const prev = tracks.find((t) => t.id === shuffleQueue[pi]);
+      if (prev) playTrack(prev);
+    } else {
+      const idx = getCurrentIndex();
+      if (idx > 0) playTrack(tracks[idx - 1]);
+    }
   }
 
   function skipNext() {
-    const idx = getCurrentIndex();
-    const tracks = getTracks();
-    const next = tracks[idx + 1] || (radioMode ? tracks[0] : null);
+    const next = nextTrack(true); // forceNext=true → 1曲リピートでも次へ
     if (next) playTrack(next);
   }
 
   function handleTrackEnded() {
-    const idx = getCurrentIndex();
-    const tracks = getTracks();
-    const next = tracks[idx + 1] || (radioMode ? tracks[0] : null);
+    const next = nextTrack(false);
     if (next) {
       playTrack(next);
     } else {
@@ -273,6 +331,27 @@
       position = 0;
       renderTransport();
     }
+  }
+
+  function toggleShuffle() {
+    shuffleMode = !shuffleMode;
+    if (shuffleMode) buildShuffleQueue();
+    else shuffleQueue = [];
+    persistPlayerPrefs();
+    renderPlaybackModeUI();
+  }
+
+  function cycleRepeat() {
+    // none → one → all → none
+    repeatMode = repeatMode === "none" ? "one" : repeatMode === "one" ? "all" : "none";
+    persistPlayerPrefs();
+    renderPlaybackModeUI();
+  }
+
+  function toggleRadioMode() {
+    radioMode = !radioMode;
+    renderRadioUI();
+    renderOnAir();
   }
 
   function seekTo(sec) {
@@ -290,13 +369,8 @@
     YouTubeEngine.setVolume(volume);
     AudioEngine.setVolume(volume);
     if (SpotifyEngine.isReady) SpotifyEngine.setVolume(volume);
+    persistPlayerPrefs();
     renderVolumeUI();
-  }
-
-  function toggleRadioMode() {
-    radioMode = !radioMode;
-    renderRadioUI();
-    renderOnAir();
   }
 
   /* ════════════════════════════════════════════
@@ -753,6 +827,7 @@
     renderPlayerPanels();
     renderTransport();
     renderRadioUI();
+    renderPlaybackModeUI();
     renderVolumeUI();
     renderOnAir();
     renderSpotifyAuthUI();
@@ -913,9 +988,11 @@
   }
 
   function wirePlayerPanel(pp) {
+    if (pp.shuffleBtn) pp.shuffleBtn.addEventListener("click", toggleShuffle);
     pp.prevBtn.addEventListener("click", skipPrev);
     pp.nextBtn.addEventListener("click", skipNext);
     pp.playBtn.addEventListener("click", togglePlayPause);
+    if (pp.repeatBtn) pp.repeatBtn.addEventListener("click", cycleRepeat);
     pp.radioBtn.addEventListener("click", toggleRadioMode);
     pp.volumeSlider.addEventListener("input", (e) => setVolumeValue(+e.target.value));
     wireSeekableTrack(pp.progressTrack, () => duration, seekTo);
@@ -1041,6 +1118,28 @@
     });
   }
 
+  function renderPlaybackModeUI() {
+    // Shuffle button
+    const shuffleText = shuffleMode ? "🔀 ON" : "🔀";
+    [dbShuffleBtn, ...$$(".pp-shuffle")].forEach((el) => {
+      if (!el) return;
+      el.textContent = shuffleText;
+      el.classList.toggle("active", shuffleMode);
+    });
+
+    // Repeat button
+    const repeatMap = { none: "🔁", one: "🔂 1", all: "🔁 ALL" };
+    const repeatText = repeatMap[repeatMode] || "🔁";
+    [dbRepeatBtn, ...$$(".pp-repeat")].forEach((el) => {
+      if (!el) return;
+      el.textContent = repeatText;
+      el.classList.toggle("active", repeatMode !== "none");
+      el.title = repeatMode === "none" ? "繰り返しなし"
+               : repeatMode === "one" ? "1曲繰り返し"
+               : "全曲繰り返し";
+    });
+  }
+
   function renderVolumeUI() {
     dbVolumeSlider.value = volume;
     [ppDesktop, ppMobile].forEach((pp) => { if (pp) pp.volumeSlider.value = volume; });
@@ -1139,6 +1238,8 @@
   dbNextBtn.addEventListener("click", skipNext);
   dbPlayBtn.addEventListener("click", togglePlayPause);
   dbRadioBtn.addEventListener("click", toggleRadioMode);
+  if (dbShuffleBtn) dbShuffleBtn.addEventListener("click", toggleShuffle);
+  if (dbRepeatBtn)  dbRepeatBtn.addEventListener("click", cycleRepeat);
   dbVolumeSlider.addEventListener("input", (e) => setVolumeValue(+e.target.value));
   wireSeekableTrack(dbProgressTrack, () => duration, seekTo);
 

@@ -29,7 +29,7 @@ const SpotifyAuth = (() => {
   // ── Configuration — EDIT THIS ────────────────────────────
   // Get a free Client ID at https://developer.spotify.com/dashboard
   // and register `<your-site>/callback.html` as a Redirect URI there.
-  const CLIENT_ID = "7e48ee5d5db74137bb3398ae8653bd7d";
+  const CLIENT_ID = "YOUR_SPOTIFY_CLIENT_ID_HERE";
   // ──────────────────────────────────────────────────────────
 
   const SCOPES = [

@@ -3,7 +3,8 @@
 ════════════════════════════════════════════════════════ */
 
 const Storage = (() => {
-  const KEY = "mixcast_playlists_v1";
+  const KEY       = "mixcast_playlists_v1";
+  const PREFS_KEY = "mixcast_prefs_v1";
 
   const SAMPLE_TRACKS = [
     {
@@ -32,6 +33,12 @@ const Storage = (() => {
     activePlaylistId: "pl1",
   };
 
+  const DEFAULT_PREFS = {
+    volume: 0.8,
+    shuffle: false,
+    repeat: "none",
+  };
+
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
@@ -55,5 +62,23 @@ const Storage = (() => {
     }
   }
 
-  return { load, save };
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(PREFS_KEY);
+      if (!raw) return { ...DEFAULT_PREFS };
+      return { ...DEFAULT_PREFS, ...JSON.parse(raw) };
+    } catch (e) {
+      return { ...DEFAULT_PREFS };
+    }
+  }
+
+  function savePrefs(prefs) {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {
+      console.warn("Prefs save failed:", e);
+    }
+  }
+
+  return { load, save, loadPrefs, savePrefs };
 })();

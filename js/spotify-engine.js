@@ -94,6 +94,8 @@ const SpotifyEngine = (() => {
   async function load(trackId, volume, autoplay) {
     const uri = `spotify:track:${trackId}`;
     endFired = false;
+    prevPlaying = false;
+    currentTrackUri = uri;
     setVolume(volume);
     if (!ready || !deviceId) {
       pendingTrackUri = uri;
@@ -158,19 +160,55 @@ const SpotifyEngine = (() => {
   }
 
   /**
-   * Call periodically (e.g. from the same 500ms poll loop used for
-   * YouTube) to detect track completion. Spotify's SDK doesn't fire
-   * a clean "ended" event, so we infer it: paused, with position
-   * essentially at duration, and we haven't already fired for this track.
+   * Track-end detection for Spotify Web Playback SDK.
+   *
+   * The SDK has no clean "ended" event (open issue since 2018, still
+   * unfixed in 2025). The most reliable documented pattern is:
+   *
+   *   1. Immediately before ending, state.paused === false AND
+   *      state.position is close to state.duration.
+   *   2. On end: state.paused === true AND state.position === 0.
+   *      The current_track URI in track_window stays the same.
+   *   3. Shortly after: a second paused+position=0 event fires.
+   *
+   * We detect "step 2" by watching for paused=true + position<500ms
+   * AND we know we were previously playing (prevPlaying flag), AND
+   * the current track URI hasn't changed to a new song (which would
+   * mean the user skipped, not that the track naturally ended).
+   *
+   * endFired guards against the double-fire from the two events.
    */
+  let prevPlaying = false;
+  let currentTrackUri = null;
+
   async function pollForEnd() {
     if (!player || endFired) return;
     const state = await player.getCurrentState().catch(() => null);
-    if (!state || !state.duration) return;
-    const remaining = state.duration - state.position;
-    if (state.paused && remaining < 800) {
+    if (!state) return;
+
+    const trackUri = state.track_window?.current_track?.uri || null;
+
+    // Detect natural end: we were playing, now paused at position ≈ 0,
+    // and the track URI is still the one we started (not a user-initiated skip).
+    if (
+      prevPlaying &&
+      state.paused &&
+      state.position < 500 &&
+      trackUri === currentTrackUri
+    ) {
       endFired = true;
+      prevPlaying = false;
       onEndedCb && onEndedCb();
+      return;
+    }
+
+    // Update tracking state.
+    prevPlaying = !state.paused;
+    if (trackUri && trackUri !== currentTrackUri) {
+      // Track changed externally (user skipped in Spotify app, etc.) —
+      // reset end-detection state but don't fire onEnded.
+      currentTrackUri = trackUri;
+      endFired = false;
     }
   }
 
