@@ -595,55 +595,50 @@
 
     const service = Services.detect(url);
 
-    if (service === "youtube") {
-      const vid = Services.extractYouTubeId(url);
-
-      // YouTube playlist URL (no video ID, or list= without v=)
+    // YouTube プレイリストのみのURL (playlist?list=... で v= なし)
+    if (service === "youtube_playlist") {
       const playlistId = Services.extractYouTubePlaylistId(url);
-      const isPlaylistOnly = playlistId && !vid;
-
-      if (isPlaylistOnly) {
-        // プレイリスト一括追加
-        const workerUrl = appSettings.yt_worker_url || "";
-        if (!workerUrl) {
-          showAddError(
-            "YouTubeプレイリストの一括追加にはCloudflare Workerの設定が必要です。設定画面（⚙）の「YouTube設定」からWorker URLを入力してください。"
-          );
-          return;
-        }
-        setAddTrackLoading(true, "YouTubeプレイリストを取得中…");
-        try {
-          const result = await fetchYouTubePlaylist(playlistId, workerUrl);
-          setAddTrackLoading(false);
-          openBulkImportPreview({
-            collectionName: result.playlistTitle,
-            serviceLabel: "YouTube",
-            sourceUrl: url,
-            items: result.videos.map((v) => ({
-              service: "youtube",
-              sourceId: v.id,
-              url: `https://www.youtube.com/watch?v=${v.id}`,
-              title: v.title,
-              artist: v.channelTitle || "",
-            })),
-          });
-        } catch (e) {
-          setAddTrackLoading(false);
-          showAddError(e.message || "プレイリストの取得に失敗しました");
-        }
+      if (!playlistId) { showAddError("YouTubeプレイリストのURLを確認してください"); return; }
+      const workerUrl = appSettings.yt_worker_url || "";
+      if (!workerUrl) {
+        showAddError(
+          "YouTubeプレイリストの一括追加にはCloudflare Workerの設定が必要です。設定画面（⚙）の「YOUTUBE」→「プレイリスト取得 Worker URL」を入力してください。"
+        );
         return;
       }
+      setAddTrackLoading(true, "YouTubeプレイリストを取得中…");
+      try {
+        const result = await fetchYouTubePlaylist(playlistId, workerUrl);
+        setAddTrackLoading(false);
+        openBulkImportPreview({
+          collectionName: result.playlistTitle,
+          serviceLabel: "YouTube",
+          sourceUrl: url,
+          items: result.videos.map((v) => ({
+            service: "youtube",
+            sourceId: v.id,
+            url: `https://www.youtube.com/watch?v=${v.id}`,
+            title: v.title,
+            artist: v.channelTitle || "",
+          })),
+        });
+      } catch (e) {
+        setAddTrackLoading(false);
+        showAddError(e.message || "プレイリストの取得に失敗しました");
+      }
+      return;
+    }
 
+    if (service === "youtube") {
+      const vid = Services.extractYouTubeId(url);
       if (!vid) { showAddError("YouTubeのURLを確認してください（例: youtube.com/watch?v=XXXXX）"); return; }
 
       const manualTitle = addTitleInput.value.trim();
       if (manualTitle) {
-        // User typed a title — skip the oEmbed round-trip
         commitNewTrack({ service: "youtube", sourceId: vid, url, title: manualTitle, artist: "" });
         return;
       }
 
-      // Fetch the real video title via YouTube's oEmbed endpoint (no API key needed)
       setAddTrackLoading(true, "YouTubeからタイトルを取得中…");
       try {
         const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
@@ -658,11 +653,9 @@
             artist: data.author_name || "",
           });
         } else {
-          // oEmbed failed (e.g. private video) — fall back to generic title
           commitNewTrack({ service: "youtube", sourceId: vid, url, title: `YouTube: ${vid}`, artist: "" });
         }
       } catch {
-        // Network error — still add the track with a generic title
         commitNewTrack({ service: "youtube", sourceId: vid, url, title: `YouTube: ${vid}`, artist: "" });
       } finally {
         setAddTrackLoading(false);

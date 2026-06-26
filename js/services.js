@@ -4,13 +4,14 @@
 
 const Services = (() => {
   const META = {
-    youtube:           { label: "YouTube",  cssClass: "badge-youtube" },
-    spotify_track:     { label: "Spotify",  cssClass: "badge-spotify" },
-    spotify_collection:{ label: "Spotify",  cssClass: "badge-spotify" }, // never stored; bulk-imported as spotify_track entries
-    direct_audio:      { label: "Podcast",  cssClass: "badge-rss" },
-    podcast_feed:      { label: "Podcast",  cssClass: "badge-rss" }, // RSS feed -> resolved to direct_audio
-    apple_podcast:     { label: "Podcast",  cssClass: "badge-rss" }, // resolves via iTunes Lookup -> RSS
-    link:              { label: "Link",     cssClass: "badge-link" },
+    youtube:            { label: "YouTube",  cssClass: "badge-youtube" },
+    youtube_playlist:   { label: "YouTube",  cssClass: "badge-youtube" }, // playlist-only URL → bulk import
+    spotify_track:      { label: "Spotify",  cssClass: "badge-spotify" },
+    spotify_collection: { label: "Spotify",  cssClass: "badge-spotify" },
+    direct_audio:       { label: "Podcast",  cssClass: "badge-rss" },
+    podcast_feed:       { label: "Podcast",  cssClass: "badge-rss" },
+    apple_podcast:      { label: "Podcast",  cssClass: "badge-rss" },
+    link:               { label: "Link",     cssClass: "badge-link" },
   };
 
   /**
@@ -35,7 +36,14 @@ const Services = (() => {
    */
   function detect(url) {
     if (!url) return "link";
-    if (/youtube\.com\/watch|youtu\.be\//.test(url)) return "youtube";
+    // YouTube: watch, short URL, playlist-only URL (youtube.com/playlist?list=...)
+    if (/youtube\.com\/(watch|playlist|shorts)|youtu\.be\//.test(url)) {
+      // Has a video ID → single video. Has only list= → playlist collection.
+      const hasVideoId = /[?&]v=([A-Za-z0-9_-]{11})/.test(url) || /youtu\.be\/([A-Za-z0-9_-]{11})/.test(url);
+      const hasListId  = /[?&]list=([A-Za-z0-9_-]+)/.test(url);
+      if (!hasVideoId && hasListId) return "youtube_playlist";
+      return "youtube";
+    }
     if (/open\.spotify\.com\/track\/|spotify:track:/.test(url)) return "spotify_track";
     if (/open\.spotify\.com\/(playlist|album)\/|spotify:(playlist|album):/.test(url)) return "spotify_collection";
     if (/podcasts\.apple\.com\/.+\/podcast\//.test(url)) return "apple_podcast";
