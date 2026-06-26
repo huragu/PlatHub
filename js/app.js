@@ -206,6 +206,14 @@
   SpotifyEngine.onError((msg) => { playerError = msg; renderPlayerPanels(); });
   SpotifyEngine.onNotPremium(() => { renderSpotifyAuthUI(); });
 
+  AudioEngine.onPlayBlocked(() => {
+    // play() was rejected (autoplay policy, likely backgrounded tab).
+    // Set a flag so visibilitychange can resume when the user returns.
+    if (document.hidden) {
+      wasPlayingBeforeHide = true;
+    }
+  });
+
   /* Position polling — used to update the progress bar UI.
      YouTube has no timeupdate event, so we poll.
      Spotify end-detection is handled in player_state_changed (event-driven,
@@ -232,6 +240,98 @@
   startYtPoll();
 
   /* ════════════════════════════════════════════
+     Tab visibility change handling
+     ─────────────────────────────────────────
+     Problem: when the user switches away from the tab, two things happen:
+       1. YouTube's IFrame API auto-pauses (YouTube's own policy).
+       2. When a track ends and the next track's play() is called while
+          backgrounded, the browser may reject it with NotAllowedError
+          (browser autoplay policy on background tabs).
+
+     Solution:
+       - When the tab becomes HIDDEN: note that we were "playing" and
+         which engine/track was active (YouTube needs special handling).
+       - When the tab becomes VISIBLE again: if we were playing before
+         hiding, resume playback. This works because the visibilitychange
+         event fires as a direct result of the user's tab-switch gesture,
+         so it counts as user interaction and bypasses autoplay policy.
+
+     Note: Podcast/<audio> playback continues uninterrupted in the background
+     by default (HTML5 audio doesn't pause on tab hide). Only YouTube pauses.
+  ════════════════════════════════════════════ */
+  let wasPlayingBeforeHide = false;
+  let pendingNextTrack = null;   // set when next-track play() was rejected while backgrounded
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      // Tab going to background.
+      // Always capture the playing state — we need it on return
+      // because YouTube will auto-pause itself while backgrounded.
+      wasPlayingBeforeHide = playing;
+    } else {
+      // Tab returning to foreground.
+      if (wasPlayingBeforeHide) {
+        // If there's a queued next-track that couldn't start while
+        // backgrounded, play it now (this counts as a user gesture).
+        if (pendingNextTrack) {
+          const track = pendingNextTrack;
+          pendingNextTrack = null;
+          wasPlayingBeforeHide = false;
+          playTrack(track);
+          return;
+        }
+
+        // YouTube auto-pauses while backgrounded — resume it.
+        // (Audio/<audio> keeps playing; Spotify manages via SDK.)
+        const engine = activeEngine();
+        if (engine === "youtube" && playing) {
+          YouTubeEngine.play();
+        } else if (engine === "audio" && playing) {
+          // In case audio was also blocked (rare but possible)
+          AudioEngine.play();
+        }
+      }
+      wasPlayingBeforeHide = false;
+    }
+  });
+
+  /* ════════════════════════════════════════════
+     Media Session API
+     ─────────────────────────────────────────
+     Registers MIXCAST as a proper media player with the browser and OS.
+     Benefits:
+       1. Keyboard media keys (play/pause/next/prev) work from any tab.
+       2. OS notification center shows what's playing (Android, macOS).
+       3. Most importantly: accumulates Chrome's Media Engagement Index
+          (MEI) score for this origin, which progressively relaxes the
+          autoplay policy over time for returning users.
+  ════════════════════════════════════════════ */
+  function updateMediaSession(track) {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track?.title || "MIXCAST",
+      artist: track?.artist || "",
+      album: "MIXCAST",
+    });
+    navigator.mediaSession.setActionHandler("play",           () => { if (!playing) togglePlayPause(); });
+    navigator.mediaSession.setActionHandler("pause",          () => { if (playing)  togglePlayPause(); });
+    navigator.mediaSession.setActionHandler("nexttrack",      () => skipNext());
+    navigator.mediaSession.setActionHandler("previoustrack",  () => skipPrev());
+    navigator.mediaSession.setActionHandler("seekto",         (d) => { if (d.seekTime != null) seekTo(d.seekTime); });
+    navigator.mediaSession.playbackState = playing ? "playing" : "paused";
+  }
+
+  function updateMediaSessionPlaybackState() {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState = playing ? "playing" : "paused";
+    if (duration > 0) {
+      try {
+        navigator.mediaSession.setPositionState({ duration, playbackRate: 1, position });
+      } catch (_) {}
+    }
+  }
+
+  /* ════════════════════════════════════════════
      Playback control actions
   ════════════════════════════════════════════ */
 
@@ -239,8 +339,12 @@
     currentTrackId = track.id;
     playing = true;
     position = 0; duration = 0; playerError = "";
+    pendingNextTrack = null;
+
     if (isMobile()) setMobileTab("player");
     renderAll();
+    updateMediaSession(track);
+
     // renderAll() re-mounts player panel(s) -> grab fresh host el
     requestAnimationFrame(() => {
       const hostEl = getVisibleYtHost();
@@ -326,12 +430,27 @@
 
   function handleTrackEnded() {
     const next = nextTrack(false);
-    if (next) {
-      playTrack(next);
-    } else {
+    if (!next) {
       playing = false;
       position = 0;
       renderTransport();
+      updateMediaSessionPlaybackState();
+      return;
+    }
+
+    // If the tab is currently hidden (user has switched away), don't call
+    // play() yet — the browser would reject it. Instead, queue the next
+    // track and let the visibilitychange handler start it when the user
+    // comes back. We still update the "now playing" display so it's ready.
+    if (document.hidden) {
+      pendingNextTrack = next;
+      // Update track info in state so the UI shows the right track when
+      // the user returns, but don't actually start playback yet.
+      currentTrackId = next.id;
+      renderAll();
+      updateMediaSession(next);
+    } else {
+      playTrack(next);
     }
   }
 
@@ -1053,6 +1172,7 @@
     if (ppDesktop) renderTransportInto(ppDesktop);
     if (ppMobile) renderTransportInto(ppMobile);
     renderTrackListActiveMarker();
+    updateMediaSessionPlaybackState();
   }
 
   function renderTransportShared() {
@@ -1296,8 +1416,45 @@
   });
 
   /* ════════════════════════════════════════════
-     Init
+     Page Visibility API — resume playback when
+     the user switches back to this tab.
+
+     Problem: browsers pause/throttle media when a
+     tab goes to the background.
+       • YouTube IFrame: pauses automatically (YT policy)
+       • <audio>: usually keeps playing, but play() calls
+         from background can be rejected
+       • Spotify SDK: connection stays alive but the
+         browser may throttle the audio context
+
+     Solution: when the tab becomes visible again AND
+     our app state says we should be playing, re-issue
+     the play command to whichever engine is active.
   ════════════════════════════════════════════ */
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return; // tab going away — do nothing
+    if (!playing) return;        // we weren't playing — do nothing
+
+    const engine = activeEngine();
+    if (!engine) return;
+
+    // Small delay so the browser has a chance to fully restore
+    // the tab before we issue the play command.
+    setTimeout(() => {
+      if (!playing) return; // user may have paused while we waited
+      if (engine === "youtube") {
+        YouTubeEngine.play();
+      } else if (engine === "audio") {
+        // <audio> may have been suspended; re-call play() which
+        // returns a Promise — errors are silently ignored since the
+        // audio is likely already playing fine.
+        AudioEngine.play();
+      } else if (engine === "spotify") {
+        SpotifyEngine.play();
+      }
+    }, 300);
+  });
+
   function init() {
     ensureDesktopPanelMounted();
     setMobileTab("tracks");

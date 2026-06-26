@@ -10,6 +10,7 @@ const AudioEngine = (() => {
   let onTimeCb = null;
   let onDurationCb = null;
   let onErrorCb = null;
+  let onPlayBlockedCb = null;   // fired when play() is rejected (likely autoplay policy)
 
   audioEl.addEventListener("ended", () => onEndedCb && onEndedCb());
   audioEl.addEventListener("timeupdate", () => {
@@ -35,13 +36,27 @@ const AudioEngine = (() => {
     audioEl.volume = clamp(volume);
     audioEl.load();
     if (autoplay) {
-      audioEl.play().catch((e) => onErrorCb && onErrorCb(`再生開始に失敗: ${e.message}`));
+      audioEl.play().catch((e) => {
+        if (e.name === "NotAllowedError") {
+          // Browser rejected play() due to autoplay policy (likely backgrounded tab).
+          // Don't surface this as a user-facing error; let the app handle it silently.
+          onPlayBlockedCb && onPlayBlockedCb();
+        } else {
+          onErrorCb && onErrorCb(`再生開始に失敗: ${e.message}`);
+        }
+      });
     }
   }
 
   function play() {
     if (audioEl.src) {
-      audioEl.play().catch((e) => onErrorCb && onErrorCb(`再生開始に失敗: ${e.message}`));
+      audioEl.play().catch((e) => {
+        if (e.name === "NotAllowedError") {
+          onPlayBlockedCb && onPlayBlockedCb();
+        } else {
+          onErrorCb && onErrorCb(`再生開始に失敗: ${e.message}`);
+        }
+      });
     }
   }
 
@@ -61,10 +76,11 @@ const AudioEngine = (() => {
   function onTime(cb) { onTimeCb = cb; }
   function onDuration(cb) { onDurationCb = cb; }
   function onError(cb) { onErrorCb = cb; }
+  function onPlayBlocked(cb) { onPlayBlockedCb = cb; }
 
   return {
     load, play, pause, seekTo, setVolume,
     getCurrentTime, getDuration,
-    onEnded, onTime, onDuration, onError,
+    onEnded, onTime, onDuration, onError, onPlayBlocked,
   };
 })();
