@@ -958,16 +958,21 @@
   function selectPlaylist(id) {
     if (state.activePlaylistId === id) return; // already active, no-op
 
-    // Stop playback from the old playlist before switching, so the engine
-    // doesn't keep playing a track that no longer belongs to the active list.
+    // Stop playback and clear all transient state so the new playlist
+    // starts from a clean slate.
     if (playing) {
       stopAllEngines();
       playing = false;
     }
+    // Also clear the "resume on tab-return" flag so the visibilitychange
+    // handler doesn't restart playback after a playlist switch that
+    // happened while the tab was hidden.
+    wasPlayingBeforeHide = false;
+    pendingNextTrack = null;
+
     currentTrackId = null;
     position = 0;
     duration = 0;
-    pendingNextTrack = null;
     shuffleQueue = [];
     shuffleQueueIndex = -1;
 
@@ -1198,9 +1203,17 @@
 
     const meta = document.createElement("div");
     meta.className = "track-meta";
+
     const titleEl = document.createElement("div");
     titleEl.className = "track-title";
     titleEl.textContent = t.title;
+    titleEl.title = "ダブルクリックでタイトルを編集";
+
+    titleEl.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      startInlineRename(titleEl, t);
+    });
+
     meta.appendChild(titleEl);
     if (t.artist) {
       const artistEl = document.createElement("div");
@@ -1218,8 +1231,73 @@
     removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeTrack(t.id); });
     item.appendChild(removeBtn);
 
-    item.addEventListener("click", () => playTrack(t));
+    let clickTimer = null;
+    item.addEventListener("click", (e) => {
+      // Ignore if we're clicking inside an active rename input
+      if (e.target.classList.contains("track-title-input")) return;
+      // Use a short delay to distinguish single-click (play) from dblclick (rename)
+      // The dblclick handler will clearTimeout if it fires first.
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => playTrack(t), 180);
+    });
+    item.addEventListener("dblclick", (e) => {
+      if (e.target.classList.contains("track-title") || e.target.closest(".track-title")) {
+        clearTimeout(clickTimer); // cancel the single-click play
+      }
+    });
     return item;
+  }
+
+  /**
+   * Replace a track title <div> with an <input>, commit on Enter/blur,
+   * cancel on Escape.
+   */
+  function startInlineRename(titleEl, track) {
+    const original = track.title;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = original;
+    input.className = "track-title-input";
+
+    input.addEventListener("click", (e) => e.stopPropagation());
+
+    let cancelled = false;
+
+    const commit = () => {
+      if (cancelled) return;
+      const newTitle = input.value.trim();
+      if (newTitle && newTitle !== original) {
+        renameTrack(track.id, newTitle);
+      } else {
+        renderAll();
+      }
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter")  { e.preventDefault(); commit(); }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelled = true;
+        renderAll(); // restore without saving
+      }
+    });
+    input.addEventListener("blur", commit);
+
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  function renameTrack(trackId, newTitle) {
+    const pl = getActivePlaylist();
+    const track = pl.tracks.find((t) => t.id === trackId);
+    if (!track) return;
+    track.title = newTitle;
+    persist();
+    renderAll();
+    // If this is the currently playing track, update the MediaSession title
+    if (trackId === currentTrackId) updateMediaSession(track);
   }
 
   /* ── Player panels (desktop + mobile share same builder) ── */

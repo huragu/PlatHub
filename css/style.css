@@ -1282,3 +1282,23 @@ input::placeholder { color: var(--text-ghost); }
     flex-direction: column;
   }
 }
+
+/* ── Track title inline rename input ── */
+.track-title-input {
+  background: #1a1a2a;
+  border: 1px solid var(--red);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font-body);
+  padding: 2px 6px;
+  width: 100%;
+  max-width: 240px;
+  outline: none;
+}
+.track-title-input:focus {
+  box-shadow: 0 0 0 2px var(--red-dim);
+}
+.track-title[title] {
+  cursor: text;
+}

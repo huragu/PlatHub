@@ -10,7 +10,12 @@ const AudioEngine = (() => {
   let onTimeCb = null;
   let onDurationCb = null;
   let onErrorCb = null;
-  let onPlayBlockedCb = null;   // fired when play() is rejected (likely autoplay policy)
+  let onPlayBlockedCb = null;
+
+  // Track the most-recent play() promise so that pause() can chain
+  // off it. Chrome silently ignores pause() if a play() is still
+  // pending, causing the audio to keep playing after stopAllEngines().
+  let playPromise = null;
 
   audioEl.addEventListener("ended", () => onEndedCb && onEndedCb());
   audioEl.addEventListener("timeupdate", () => {
@@ -30,46 +35,49 @@ const AudioEngine = (() => {
     onErrorCb && onErrorCb(messages[code] || "音声の読み込みに失敗しました");
   });
 
+  function _doPlay() {
+    playPromise = audioEl.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((e) => {
+        playPromise = null;
+        if (e.name === "NotAllowedError") {
+          onPlayBlockedCb && onPlayBlockedCb();
+        } else if (e.name !== "AbortError") {
+          // AbortError is expected when pause() interrupts a pending play()
+          onErrorCb && onErrorCb(`再生開始に失敗: ${e.message}`);
+        }
+      }).then(() => { playPromise = null; });
+    }
+  }
+
   function load(src, volume, autoplay) {
-    audioEl.pause();
+    // Pause first — but safely, in case a play() is still resolving
+    _safePause();
     audioEl.src = src;
     audioEl.volume = clamp(volume);
     audioEl.load();
-    if (autoplay) {
-      audioEl.play().catch((e) => {
-        if (e.name === "NotAllowedError") {
-          // Browser rejected play() due to autoplay policy (likely backgrounded tab).
-          // Don't surface this as a user-facing error; let the app handle it silently.
-          onPlayBlockedCb && onPlayBlockedCb();
-        } else {
-          onErrorCb && onErrorCb(`再生開始に失敗: ${e.message}`);
-        }
-      });
-    }
+    if (autoplay) _doPlay();
   }
 
   function play() {
-    if (audioEl.src) {
-      audioEl.play().catch((e) => {
-        if (e.name === "NotAllowedError") {
-          onPlayBlockedCb && onPlayBlockedCb();
-        } else {
-          onErrorCb && onErrorCb(`再生開始に失敗: ${e.message}`);
-        }
-      });
+    if (audioEl.src) _doPlay();
+  }
+
+  function _safePause() {
+    if (playPromise !== undefined && playPromise !== null) {
+      // play() is still pending — chain pause() after it resolves
+      playPromise.then(() => { audioEl.pause(); }).catch(() => {});
+    } else {
+      audioEl.pause();
     }
   }
 
-  function pause() { audioEl.pause(); }
+  function pause() { _safePause(); }
 
   function seekTo(sec) { audioEl.currentTime = sec; }
-
   function setVolume(vol) { audioEl.volume = clamp(vol); }
-
   function getCurrentTime() { return audioEl.currentTime || 0; }
-
   function getDuration() { return audioEl.duration || 0; }
-
   function clamp(v) { return Math.max(0, Math.min(1, v)); }
 
   function onEnded(cb) { onEndedCb = cb; }
