@@ -2,35 +2,27 @@
    spotify-auth.js
    OAuth2 Authorization Code + PKCE flow for Spotify.
 
-   Why PKCE: this is a static site with no backend, so we can't
-   safely store a client_secret. PKCE is the flow Spotify
-   recommends precisely for this case (SPA / mobile / desktop
-   apps where the secret can't be protected).
+   Client ID の設定方法（2通り）:
+   A) このファイルの HARDCODED_CLIENT_ID に直接貼り付けて再デプロイ。
+   B) アプリのヘッダーにある「Spotifyでログイン」ボタンをクリック→
+      ダイアログに Client ID を入力→保存。ファイル編集は不要。
+      localStorage に保存されるので次回以降も有効。
 
-   Flow:
-   1. login()      -> generate code_verifier + code_challenge,
-                       stash verifier in sessionStorage, redirect
-                       the browser to Spotify's /authorize page.
-   2. (Spotify redirects back to callback.html with ?code=...)
-   3. handleCallback() on callback.html exchanges the code for
-      an access_token + refresh_token using the stashed verifier,
-      stores both in sessionStorage, then redirects back to the
-      main app.
-   4. getValidAccessToken() returns the current token, silently
-      refreshing it first if it has expired.
-
-   IMPORTANT: Replace CLIENT_ID below with your own, obtained
-   for free at https://developer.spotify.com/dashboard
-   (see README.md for the exact steps).
+   Client ID の取得: https://developer.spotify.com/dashboard
+   （取得手順は README.md を参照）
 ════════════════════════════════════════════════════════ */
 
 const SpotifyAuth = (() => {
 
-  // ── Configuration — EDIT THIS ────────────────────────────
-  // Get a free Client ID at https://developer.spotify.com/dashboard
-  // and register `<your-site>/callback.html` as a Redirect URI there.
-  const CLIENT_ID = "YOUR_SPOTIFY_CLIENT_ID_HERE";
-  // ──────────────────────────────────────────────────────────
+  // ── Client ID ────────────────────────────────────────
+  // ファイルを直接編集する場合はここに貼り付ける（任意）。
+  // 空のままでも、アプリ内のダイアログから設定できます。
+  const HARDCODED_CLIENT_ID = "YOUR_SPOTIFY_CLIENT_ID_HERE";
+
+  const CLIENT_ID_KEY  = "mixcast_spotify_client_id";
+  const STORAGE_KEY    = "mixcast_spotify_tokens_v1";
+  const VERIFIER_KEY   = "mixcast_spotify_pkce_verifier";
+  // ──────────────────────────────────────────────────────
 
   const SCOPES = [
     "streaming",
@@ -42,20 +34,37 @@ const SpotifyAuth = (() => {
     "playlist-read-collaborative",
   ].join(" ");
 
-  const STORAGE_KEY = "mixcast_spotify_tokens_v1";
-  const VERIFIER_KEY = "mixcast_spotify_pkce_verifier";
+  /* ── Client ID management ── */
+
+  /** Returns the active Client ID (localStorage > hardcoded), or "" if none. */
+  function getClientId() {
+    const stored = (localStorage.getItem(CLIENT_ID_KEY) || "").trim();
+    if (stored && stored !== "YOUR_SPOTIFY_CLIENT_ID_HERE") return stored;
+    const hc = (HARDCODED_CLIENT_ID || "").trim();
+    if (hc && hc !== "YOUR_SPOTIFY_CLIENT_ID_HERE") return hc;
+    return "";
+  }
+
+  /** Persist a Client ID entered at runtime (no file editing needed). */
+  function setClientId(id) {
+    const trimmed = (id || "").trim();
+    if (trimmed) {
+      localStorage.setItem(CLIENT_ID_KEY, trimmed);
+    }
+  }
+
+  /** True when a usable Client ID is available. */
+  function isConfigured() {
+    return !!getClientId();
+  }
 
   function redirectUri() {
-    // Same directory as wherever index.html/callback.html are served from.
     const path = window.location.pathname.replace(/[^/]*$/, "callback.html");
     return `${window.location.origin}${path}`;
   }
 
-  function isConfigured() {
-    return !!CLIENT_ID && CLIENT_ID !== "YOUR_SPOTIFY_CLIENT_ID_HERE";
-  }
-
   /* ── PKCE helpers ── */
+
   function randomString(length) {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     const bytes = crypto.getRandomValues(new Uint8Array(length));
@@ -63,9 +72,9 @@ const SpotifyAuth = (() => {
   }
 
   async function sha256Base64Url(text) {
-    const data = new TextEncoder().encode(text);
+    const data   = new TextEncoder().encode(text);
     const digest = await crypto.subtle.digest("SHA-256", data);
-    const bytes = new Uint8Array(digest);
+    const bytes  = new Uint8Array(digest);
     let binary = "";
     bytes.forEach((b) => (binary += String.fromCharCode(b)));
     return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -73,44 +82,43 @@ const SpotifyAuth = (() => {
 
   /* ── Step 1: kick off login ── */
   async function login() {
-    if (!isConfigured()) {
-      throw new Error(
-        "Spotify Client IDが未設定です。js/spotify-auth.js の CLIENT_ID を設定してください。"
-      );
+    const clientId = getClientId();
+    if (!clientId) {
+      throw new Error("Spotify Client IDが設定されていません");
     }
-    const verifier = randomString(64);
+    const verifier   = randomString(64);
+    const challenge  = await sha256Base64Url(verifier);
     sessionStorage.setItem(VERIFIER_KEY, verifier);
-    const challenge = await sha256Base64Url(verifier);
 
     const params = new URLSearchParams({
-      client_id: CLIENT_ID,
-      response_type: "code",
-      redirect_uri: redirectUri(),
-      scope: SCOPES,
-      code_challenge_method: "S256",
-      code_challenge: challenge,
-      state: randomString(16),
+      client_id:              clientId,
+      response_type:          "code",
+      redirect_uri:           redirectUri(),
+      scope:                  SCOPES,
+      code_challenge_method:  "S256",
+      code_challenge:         challenge,
+      state:                  randomString(16),
     });
     window.location.href = `https://accounts.spotify.com/authorize?${params}`;
   }
 
-  /* ── Step 2: handle the redirect back (called from callback.html) ── */
+  /* ── Step 2: handle the redirect (called from callback.html) ── */
   async function handleCallback() {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-    const error = params.get("error");
+    const code   = params.get("code");
+    const error  = params.get("error");
 
     if (error) throw new Error(`Spotify認証が拒否されました（${error}）`);
-    if (!code) throw new Error("認証コードが見つかりませんでした");
+    if (!code)  throw new Error("認証コードが見つかりませんでした");
 
     const verifier = sessionStorage.getItem(VERIFIER_KEY);
     if (!verifier) throw new Error("検証情報が見つかりません。最初からやり直してください");
 
     const body = new URLSearchParams({
-      client_id: CLIENT_ID,
-      grant_type: "authorization_code",
+      client_id:     getClientId(),
+      grant_type:    "authorization_code",
       code,
-      redirect_uri: redirectUri(),
+      redirect_uri:  redirectUri(),
       code_verifier: verifier,
     });
 
@@ -123,33 +131,31 @@ const SpotifyAuth = (() => {
       const detail = await res.text().catch(() => "");
       throw new Error(`トークン取得に失敗しました（HTTP ${res.status}）${detail ? ": " + detail : ""}`);
     }
-    const data = await res.json();
-    storeTokens(data);
+    storeTokens(await res.json());
     sessionStorage.removeItem(VERIFIER_KEY);
   }
 
+  /* ── Token storage helpers ── */
+
   function storeTokens(data) {
-    const record = {
-      access_token: data.access_token,
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+      access_token:  data.access_token,
       refresh_token: data.refresh_token || readTokens()?.refresh_token,
-      expires_at: Date.now() + (data.expires_in - 30) * 1000, // 30s safety margin
-    };
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(record));
+      expires_at:    Date.now() + (data.expires_in - 30) * 1000,
+    }));
   }
 
   function readTokens() {
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
       return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   async function refreshAccessToken(refreshToken) {
     const body = new URLSearchParams({
-      client_id: CLIENT_ID,
-      grant_type: "refresh_token",
+      client_id:     getClientId(),
+      grant_type:    "refresh_token",
       refresh_token: refreshToken,
     });
     const res = await fetch("https://accounts.spotify.com/api/token", {
@@ -158,12 +164,11 @@ const SpotifyAuth = (() => {
       body,
     });
     if (!res.ok) throw new Error(`トークン更新に失敗しました（HTTP ${res.status}）`);
-    const data = await res.json();
-    storeTokens(data);
+    storeTokens(await res.json());
     return readTokens().access_token;
   }
 
-  /* ── Step 4: get a valid token, refreshing if needed ── */
+  /* ── Step 4: get a valid token ── */
   async function getValidAccessToken() {
     const tokens = readTokens();
     if (!tokens) return null;
@@ -177,14 +182,17 @@ const SpotifyAuth = (() => {
     }
   }
 
-  function isLoggedIn() {
-    return !!readTokens();
-  }
+  function isLoggedIn() { return !!readTokens(); }
 
   function logout() {
     sessionStorage.removeItem(STORAGE_KEY);
     sessionStorage.removeItem(VERIFIER_KEY);
   }
 
-  return { login, handleCallback, getValidAccessToken, isLoggedIn, logout, isConfigured, redirectUri };
+  return {
+    login, handleCallback, getValidAccessToken,
+    isLoggedIn, logout,
+    isConfigured, getClientId, setClientId,
+    redirectUri,
+  };
 })();

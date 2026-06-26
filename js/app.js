@@ -1269,19 +1269,103 @@
 
   function renderSpotifyAuthUI() {
     if (!spotifyAuthBtn) return;
+    // Always enabled — even when not configured, clicking opens the setup dialog.
+    spotifyAuthBtn.disabled = false;
+
     if (!SpotifyAuth.isConfigured()) {
-      spotifyAuthBtn.textContent = "Spotify未設定";
-      spotifyAuthBtn.disabled = true;
-      spotifyAuthBtn.title = "js/spotify-auth.js に Client ID を設定してください";
+      spotifyAuthBtn.textContent = "🎵 Spotify設定";
+      spotifyAuthBtn.classList.remove("connected");
+      spotifyAuthBtn.title = "クリックしてSpotify Client IDを設定";
       return;
     }
     if (SpotifyAuth.isLoggedIn()) {
       spotifyAuthBtn.textContent = "🟢 Spotify連携中";
       spotifyAuthBtn.classList.add("connected");
+      spotifyAuthBtn.title = "クリックしてログアウト";
     } else {
-      spotifyAuthBtn.textContent = "Spotifyでログイン";
+      spotifyAuthBtn.textContent = "🎵 Spotifyでログイン";
       spotifyAuthBtn.classList.remove("connected");
+      spotifyAuthBtn.title = "Spotify Premiumアカウントでログイン";
     }
+  }
+
+  /** Show a dialog letting the user enter their Spotify Client ID at runtime. */
+  function promptForClientId() {
+    const current = SpotifyAuth.getClientId();
+    const modal = document.createElement("div");
+    modal.style.cssText = `
+      position:fixed; inset:0; background:rgba(5,5,10,.75); backdrop-filter:blur(3px);
+      display:flex; align-items:center; justify-content:center;
+      z-index:9000; padding:20px;
+    `;
+    modal.innerHTML = `
+      <div style="background:#0f0f1a; border:1px solid #2a2a3a; border-radius:14px;
+                  width:100%; max-width:440px; padding:24px; font-family:Inter,sans-serif;">
+        <div style="font-family:'Space Grotesk',sans-serif; font-size:17px; font-weight:700;
+                    color:#F5F5F0; margin-bottom:8px;">Spotify Client ID を設定</div>
+        <p style="font-size:13px; color:#888; margin:0 0 16px; line-height:1.6;">
+          <a href="https://developer.spotify.com/dashboard" target="_blank"
+             style="color:#1DB954;">developer.spotify.com/dashboard</a>
+          でアプリを作成し、Client ID をコピーして貼り付けてください。<br>
+          Redirect URI に <code style="font-size:11px; color:#aaa;">${SpotifyAuth.redirectUri()}</code> を登録してください。
+        </p>
+        <input id="clientIdInput" type="text" placeholder="例: a1b2c3d4e5f6..." value="${current}"
+          style="background:#1a1a2a; border:1px solid #2a2a3a; border-radius:8px;
+                 color:#F5F5F0; font-size:14px; padding:10px 12px; width:100%;
+                 box-sizing:border-box; outline:none; margin-bottom:8px; font-family:Inter,sans-serif;">
+        <p id="clientIdError" style="font-size:12px; color:#E94560; margin:0 0 14px; min-height:16px;"></p>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button id="clientIdCancelBtn"
+            style="background:none; border:1px solid #2a2a3a; border-radius:8px;
+                   color:#888; font-size:13px; padding:8px 16px; cursor:pointer;
+                   font-family:'Space Grotesk',sans-serif; font-weight:600;">
+            キャンセル
+          </button>
+          <button id="clientIdSaveBtn"
+            style="background:#E94560; border:none; border-radius:8px;
+                   color:#fff; font-size:13px; padding:8px 16px; cursor:pointer;
+                   font-family:'Space Grotesk',sans-serif; font-weight:600;">
+            保存してログイン
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const input = modal.querySelector("#clientIdInput");
+    const errEl = modal.querySelector("#clientIdError");
+
+    input.focus();
+    input.select();
+
+    const close = () => { modal.remove(); };
+    modal.querySelector("#clientIdCancelBtn").addEventListener("click", close);
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+
+    modal.querySelector("#clientIdSaveBtn").addEventListener("click", async () => {
+      const val = input.value.trim();
+      if (!val) { errEl.textContent = "Client IDを入力してください"; return; }
+      // Basic format check: Spotify Client IDs are 32-character hex strings
+      if (!/^[0-9a-f]{32}$/i.test(val)) {
+        errEl.textContent = "Spotify Client IDは32文字の英数字です。Dashboardからコピーした値をそのまま貼り付けてください";
+        return;
+      }
+      SpotifyAuth.setClientId(val);
+      close();
+      renderSpotifyAuthUI();
+      // Immediately start the OAuth login flow with the new Client ID
+      try {
+        await SpotifyAuth.login();
+      } catch (e) {
+        showToast(e.message || "ログインを開始できませんでした");
+      }
+    });
+
+    // Allow Enter key to submit
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") modal.querySelector("#clientIdSaveBtn").click();
+      if (e.key === "Escape") close();
+    });
   }
 
   /* ════════════════════════════════════════════
@@ -1376,12 +1460,19 @@
   if (spotifyAuthBtn) {
     spotifyAuthBtn.addEventListener("click", async () => {
       if (SpotifyAuth.isLoggedIn()) {
+        // ログアウト
         SpotifyEngine.disconnect();
         SpotifyAuth.logout();
         renderSpotifyAuthUI();
         showToast("Spotifyからログアウトしました");
         return;
       }
+      if (!SpotifyAuth.isConfigured()) {
+        // Client ID未設定 → 設定ダイアログを開く
+        promptForClientId();
+        return;
+      }
+      // Client ID設定済み・未ログイン → ログインフロー開始
       try {
         await SpotifyAuth.login();
       } catch (e) {
