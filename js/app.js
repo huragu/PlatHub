@@ -8,7 +8,7 @@
   /* ─── State ─── */
   let state = Storage.load();
   const _prefs = Storage.loadPrefs();
-  let mobileTab = "tracks"; // "playlists" | "tracks" | "player"
+  let mobileTab = "tracks"; // "playlists" | "tracks" | "player" | "settings"
 
   let currentTrackId = null;
   let playing = false;
@@ -22,6 +22,9 @@
 
   // Shuffle order cache — rebuilt when shuffle is toggled or playlist changes
   let shuffleQueue = [];
+
+  // App settings (per-platform volume, radio behaviour, etc.)
+  let appSettings = Settings.load();
 
   let waveformTimer = null;
 
@@ -38,10 +41,10 @@
   const playerPanelDesktop = $("#playerPanelDesktop");
   const mobilePlaylistsView = $("#mobilePlaylistsView");
   const mobilePlayerView = $("#mobilePlayerView");
+  const mobileSettingsView = $("#mobileSettingsView");
 
   const playlistsListDesktop = $("#playlistsListDesktop");
   const playlistsListMobile = $("#playlistsListMobile");
-  const plListCountEl = $("#plListCount");
 
   // Mobile new-playlist form
   const toggleNewPlaylistFormBtn = $("#toggleNewPlaylistForm");
@@ -64,7 +67,6 @@
   const addTrackBtn = $("#addTrackBtn");
   const addErrorEl = $("#addError");
   const trackListEl = $("#trackList");
-  const emptyStateEl = $("#emptyState");
 
   const miniBar = $("#miniBar");
   const miniBarTitle = $("#miniBarTitle");
@@ -89,6 +91,14 @@
   const dbVolumeSlider = $("#dbVolumeSlider");
 
   const tabBtns = $$(".tab-btn");
+
+  // Settings panel (desktop drawer + mobile view)
+  const settingsBtn      = $("#settingsBtn");
+  const settingsPanel    = $("#settingsPanel");
+  const settingsOverlay  = $("#settingsOverlay");
+  const settingsCloseBtn = $("#settingsCloseBtn");
+  const settingsContentDesktop = $("#settingsContentDesktop");
+  const settingsContentMobile  = $("#settingsContentMobile");
 
   // Bulk import preview modal
   const bulkImportModalEl = $("#bulkImportModal");
@@ -298,7 +308,7 @@
   /* ════════════════════════════════════════════
      Media Session API
      ─────────────────────────────────────────
-     Registers MIXCAST as a proper media player with the browser and OS.
+     Registers PlatHub as a proper media player with the browser and OS.
      Benefits:
        1. Keyboard media keys (play/pause/next/prev) work from any tab.
        2. OS notification center shows what's playing (Android, macOS).
@@ -309,9 +319,9 @@
   function updateMediaSession(track) {
     if (!("mediaSession" in navigator)) return;
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: track?.title || "MIXCAST",
+      title: track?.title || "PlatHub",
       artist: track?.artist || "",
-      album: "MIXCAST",
+      album: "PlatHub",
     });
     navigator.mediaSession.setActionHandler("play",           () => { if (!playing) togglePlayPause(); });
     navigator.mediaSession.setActionHandler("pause",          () => { if (playing)  togglePlayPause(); });
@@ -471,7 +481,31 @@
 
   function toggleRadioMode() {
     radioMode = !radioMode;
+
+    // Apply settings when RADIO is turned ON
+    if (radioMode) {
+      // Shuffle: "on" → force on, "off" → force off, "inherit" → leave as-is
+      if (appSettings.radio_shuffle === "on" && !shuffleMode) {
+        shuffleMode = true;
+        buildShuffleQueue();
+        persistPlayerPrefs();
+      } else if (appSettings.radio_shuffle === "off" && shuffleMode) {
+        shuffleMode = false;
+        shuffleQueue = [];
+        persistPlayerPrefs();
+      }
+
+      // Auto-start: begin playback if nothing is playing
+      if (appSettings.radio_autostart && !playing && getTracks().length > 0) {
+        const firstTrack = shuffleMode
+          ? (getTracks().find(t => t.id === shuffleQueue[0]) || getTracks()[0])
+          : getTracks()[0];
+        if (firstTrack) playTrack(firstTrack);
+      }
+    }
+
     renderRadioUI();
+    renderPlaybackModeUI();
     renderOnAir();
   }
 
@@ -487,9 +521,7 @@
 
   function setVolumeValue(v) {
     volume = Math.max(0, Math.min(1, v));
-    YouTubeEngine.setVolume(volume);
-    AudioEngine.setVolume(volume);
-    if (SpotifyEngine.isReady) SpotifyEngine.setVolume(volume);
+    applyPlatformVolumes();
     persistPlayerPrefs();
     renderVolumeUI();
   }
@@ -926,13 +958,62 @@
     tracksView.classList.toggle("tab-hidden", tab !== "tracks");
     mobilePlaylistsView.hidden = tab !== "playlists";
     mobilePlayerView.hidden = tab !== "player";
-    miniBar.hidden = !getCurrentTrack() || tab === "player";
+    mobileSettingsView.hidden = tab !== "settings";
+    miniBar.hidden = !getCurrentTrack() || tab === "player" || tab === "settings";
 
-    // When switching to player tab, mount/refresh the mobile panel
-    // and migrate the YT host so playback continues uninterrupted.
     if (tab === "player") {
       ensureMobilePanelMounted();
       renderPlayerPanels();
+    }
+    if (tab === "settings") {
+      renderSettingsPanel();
+    }
+  }
+
+  /* ── Settings panel (desktop drawer) ── */
+
+  function openSettingsPanel() {
+    settingsPanel.hidden = false;
+    settingsOverlay.hidden = false;
+    // Render after unhiding so the guard in renderSettingsPanel sees the panel as visible
+    Settings.render(settingsContentDesktop, { ...appSettings }, (prefs) => {
+      appSettings = prefs;
+      Settings.save(prefs);
+      applyPlatformVolumes();
+    });
+  }
+
+  function closeSettingsPanel() {
+    settingsPanel.hidden = true;
+    settingsOverlay.hidden = true;
+  }
+
+  function renderSettingsPanel() {
+    const onPrefsChange = (prefs) => {
+      appSettings = prefs;
+      Settings.save(prefs);
+      applyPlatformVolumes();
+    };
+    // Desktop drawer
+    if (settingsContentDesktop && !settingsPanel.hidden) {
+      Settings.render(settingsContentDesktop, { ...appSettings }, onPrefsChange);
+    }
+    // Mobile settings tab
+    if (settingsContentMobile && !mobileSettingsView.hidden) {
+      Settings.render(settingsContentMobile, { ...appSettings }, onPrefsChange);
+    }
+  }
+
+  /**
+   * Apply per-platform volume offsets on top of the master volume.
+   * Called whenever master volume changes OR settings are saved.
+   */
+  function applyPlatformVolumes() {
+    const masterVol = volume;
+    YouTubeEngine.setVolume(Math.min(1, masterVol * (appSettings.vol_youtube ?? 1)));
+    AudioEngine.setVolume(Math.min(1, masterVol * (appSettings.vol_podcast ?? 1)));
+    if (SpotifyEngine.isReady) {
+      SpotifyEngine.setVolume(Math.min(1, masterVol * (appSettings.vol_spotify ?? 1)));
     }
   }
 
@@ -973,7 +1054,7 @@
         container.appendChild(buildPlaylistItem(pl));
       });
     });
-    if (plListCountEl) plListCountEl.textContent = `${state.playlists.length} 件`;
+
   }
 
   function buildPlaylistItem(pl) {
@@ -1457,6 +1538,10 @@
     btn.addEventListener("click", () => setMobileTab(btn.dataset.tab));
   });
 
+  if (settingsBtn) settingsBtn.addEventListener("click", openSettingsPanel);
+  if (settingsCloseBtn) settingsCloseBtn.addEventListener("click", closeSettingsPanel);
+  if (settingsOverlay) settingsOverlay.addEventListener("click", closeSettingsPanel);
+
   if (spotifyAuthBtn) {
     spotifyAuthBtn.addEventListener("click", async () => {
       if (SpotifyAuth.isLoggedIn()) {
@@ -1550,11 +1635,8 @@
     ensureDesktopPanelMounted();
     setMobileTab("tracks");
     renderAll();
+    applyPlatformVolumes();
 
-    // If the user is already logged into Spotify from a previous
-    // session (token still valid in sessionStorage), warm up the
-    // Web Playback SDK in the background so playback starts faster
-    // on the first click.
     if (SpotifyAuth.isLoggedIn()) {
       SpotifyEngine.init().catch(() => {});
     }

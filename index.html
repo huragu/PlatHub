@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>MIXCAST — マルチソース統合プレーヤー</title>
+<title>PlatHub — マルチプラットフォーム統合プレーヤー</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
@@ -14,7 +14,7 @@
 
   <!-- ═══ Header ═══ -->
   <header class="header">
-    <span class="logo">◉ MIXCAST</span>
+    <span class="logo">◈ PlatHub</span>
     <div class="onair" id="onairLamp">
       <span class="onair-dot"></span>
       <span class="onair-text">ON AIR</span>
@@ -22,13 +22,14 @@
     <div class="header-right">
       <button class="btn-outline btn-sm spotify-auth-btn" id="spotifyAuthBtn">Spotifyでログイン</button>
       <span class="track-count" id="trackCount">0 tracks</span>
+      <button class="settings-btn" id="settingsBtn" title="設定">⚙</button>
     </div>
   </header>
 
-  <!-- ═══ Main (desktop: 3-pane / mobile: single view + tabs) ═══ -->
+  <!-- ═══ Main ═══ -->
   <div class="main">
 
-    <!-- Sidebar: playlists (desktop only, mobile uses tab) -->
+    <!-- Sidebar: playlists (desktop) -->
     <aside class="sidebar" id="sidebarView">
       <div class="sidebar-header">
         <div class="sidebar-title">PLAYLISTS</div>
@@ -58,55 +59,50 @@
           <button class="btn-primary" id="addTrackBtn">追加</button>
         </div>
         <p class="add-error" id="addError" hidden></p>
-        <p class="add-hint">対応: youtube.com/watch?v=… ・ open.spotify.com/track または playlist/album（要ログイン） ・ podcasts.apple.com/…（番組URLは全話一括追加） ・ .mp3 / .ogg / 直接のフィードURL（一括追加対応）</p>
+        <p class="add-hint">対応: youtube.com · open.spotify.com/track|playlist|album · podcasts.apple.com · .mp3/.ogg · 任意のPodcastフィード</p>
       </div>
 
-      <div class="track-list" id="trackList">
-        <div class="empty-state" id="emptyState">
-          <div class="empty-icon">📻</div>
-          <div>「+ 追加」からトラックを追加しよう</div>
-        </div>
-      </div>
+      <div class="track-list" id="trackList"></div>
     </section>
 
-    <!-- Right: player panel (desktop only, mobile uses tab) -->
+    <!-- Right: player panel (desktop) -->
     <section class="player-panel" id="playerPanelDesktop">
       <div id="playerPanelContentDesktop"></div>
     </section>
 
-    <!-- Mobile: playlists view (shown via tab) -->
+    <!-- Mobile: playlists view -->
     <section class="mobile-playlists-view" id="mobilePlaylistsView" hidden>
       <div class="tracks-header">
-        <div>
-          <div class="tracks-title">プレイリスト</div>
-          <div class="tracks-sub" id="plListCount">0 件</div>
-        </div>
-        <button class="btn-outline" id="toggleNewPlaylistForm">+ 新規作成</button>
+        <div class="tracks-title">プレイリスト</div>
+        <button class="btn-outline btn-sm" id="toggleNewPlaylistForm">+ 新規作成</button>
       </div>
-
       <div class="add-form" id="newPlaylistForm" hidden>
         <div class="add-form-row">
           <input type="text" id="newPlaylistInput" placeholder="プレイリスト名を入力" class="input">
           <button class="btn-primary" id="createPlaylistBtn">作成</button>
         </div>
       </div>
-
       <div id="playlistsListMobile" class="playlists-list"></div>
     </section>
 
-    <!-- Mobile: fullscreen player view (shown via tab) -->
+    <!-- Mobile: fullscreen player -->
     <section class="mobile-player-view" id="mobilePlayerView" hidden>
       <div id="playerPanelContentMobile"></div>
     </section>
 
+    <!-- Mobile: settings view -->
+    <section class="mobile-settings-view" id="mobileSettingsView" hidden>
+      <div class="settings-content" id="settingsContentMobile"></div>
+    </section>
+
   </div>
 
-  <!-- ═══ Mini bar (mobile only, shown when not on player tab) ═══ -->
+  <!-- ═══ Mini bar (mobile) ═══ -->
   <div class="minibar" id="miniBar" hidden>
     <div class="minibar-info">
       <div class="minibar-title" id="miniBarTitle"></div>
       <div class="minibar-progress">
-        <div class="progress-track" id="miniBarProgressTrack">
+        <div class="progress-track compact" id="miniBarProgressTrack">
           <div class="progress-fill" id="miniBarProgressFill"></div>
         </div>
       </div>
@@ -159,11 +155,26 @@
     <button class="tab-btn" data-tab="player">
       <span class="tab-icon">▶</span><span class="tab-label">プレーヤー</span>
     </button>
+    <button class="tab-btn" data-tab="settings">
+      <span class="tab-icon">⚙</span><span class="tab-label">設定</span>
+    </button>
   </nav>
 
 </div>
 
-<!-- ═══ Bulk import preview modal ═══ -->
+<!-- ═══ Settings Panel (desktop: slide-in drawer on the right) ═══ -->
+<aside class="settings-panel" id="settingsPanel" hidden>
+  <div class="settings-inner">
+    <div class="settings-header">
+      <span class="settings-title">設定</span>
+      <button class="settings-close-btn" id="settingsCloseBtn">✕</button>
+    </div>
+    <div class="settings-content" id="settingsContentDesktop"></div>
+  </div>
+</aside>
+<div class="settings-overlay" id="settingsOverlay" hidden></div>
+
+<!-- ═══ Bulk import modal ═══ -->
 <div class="modal-overlay" id="bulkImportModal" hidden>
   <div class="modal-box">
     <div class="modal-header">
@@ -173,14 +184,11 @@
       </div>
       <button class="modal-close-btn" id="bulkImportCloseBtn">✕</button>
     </div>
-
     <label class="bulk-import-select-all">
       <input type="checkbox" id="bulkImportSelectAll" checked>
       <span>すべて選択 / 解除</span>
     </label>
-
     <div class="bulk-import-list" id="bulkImportList"></div>
-
     <div class="modal-footer">
       <span class="bulk-import-count" id="bulkImportCount">0 / 0 件を追加</span>
       <div class="modal-footer-buttons">
@@ -191,10 +199,10 @@
   </div>
 </div>
 
-<!-- ═══ Toast notification ═══ -->
+<!-- ═══ Toast ═══ -->
 <div class="toast" id="toast" hidden></div>
 
-<!-- Player panel template (reused for desktop + mobile via JS) -->
+<!-- Player panel template -->
 <template id="playerPanelTemplate">
   <div class="pp-error" hidden></div>
   <div class="pp-youtube-wrap" hidden>
@@ -248,6 +256,7 @@
 <script src="js/audio-engine.js"></script>
 <script src="js/spotify-engine.js"></script>
 <script src="js/player-panel.js"></script>
+<script src="js/settings.js"></script>
 <script src="js/app.js"></script>
 
 </body>
