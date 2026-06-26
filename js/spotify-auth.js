@@ -17,7 +17,7 @@ const SpotifyAuth = (() => {
   // ── Client ID ────────────────────────────────────────
   // ファイルを直接編集する場合はここに貼り付ける（任意）。
   // 空のままでも、アプリ内のダイアログから設定できます。
-  const HARDCODED_CLIENT_ID = "YOUR_SPOTIFY_CLIENT_ID_HERE";
+  const HARDCODED_CLIENT_ID = "7e48ee5d5db74137bb3398ae8653bd7d";
 
   const CLIENT_ID_KEY  = "mixcast_spotify_client_id";
   const STORAGE_KEY    = "mixcast_spotify_tokens_v1";
