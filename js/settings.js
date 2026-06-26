@@ -22,7 +22,8 @@ const Settings = (() => {
     vol_spotify:          1.0,
     vol_podcast:          1.0,
     radio_autostart:      false,
-    radio_shuffle_on_start: false,  // when radio auto-starts, start with shuffle on?
+    radio_shuffle_on_start: false,
+    yt_worker_url:        "",   // Cloudflare Worker URL for YouTube playlist fetch
   };
 
   /* ── Persistence ── */
@@ -169,7 +170,41 @@ const Settings = (() => {
 
     container.appendChild(radioSection);
 
-    /* ─ 3. 使い方 ─ */
+    /* ─ 3. YouTube ─ */
+    const ytSection = section("YouTube");
+
+    // Worker URL input for playlist bulk-add
+    const ytWorkerRow = el("div", { class: "setting-row setting-row-col" });
+    const ytWorkerLabel = el("div", { class: "setting-row-label" }, "プレイリスト取得 Worker URL");
+    const ytWorkerDesc = el("div", { class: "setting-row-desc" },
+      "YouTubeプレイリストURLを一括追加するためのCloudflare Worker URL。未設定の場合は単曲追加のみ可能です。"
+    );
+    ytWorkerLabel.appendChild(ytWorkerDesc);
+
+    const ytWorkerWrap = el("div", { class: "setting-text-input-wrap" });
+    const ytWorkerInput = el("input");
+    ytWorkerInput.type = "text";
+    ytWorkerInput.className = "setting-text-input";
+    ytWorkerInput.placeholder = "https://your-worker.your-name.workers.dev";
+    ytWorkerInput.value = prefs.yt_worker_url || "";
+    ytWorkerInput.addEventListener("change", () => {
+      prefs.yt_worker_url = ytWorkerInput.value.trim();
+      onPrefsChange(prefs);
+    });
+
+    ytWorkerWrap.appendChild(ytWorkerInput);
+    ytWorkerRow.appendChild(ytWorkerLabel);
+    ytWorkerRow.appendChild(ytWorkerWrap);
+    ytSection.appendChild(ytWorkerRow);
+
+    ytSection.appendChild(el("div", { class: "setting-guide", html: `
+      <p>Cloudflare Worker を使うと、YouTube Data API を安全に呼び出してプレイリストを丸ごと追加できます。</p>
+      <p>Worker のコードと設定手順は <code>README.md</code> に記載しています。</p>
+    ` }));
+
+    container.appendChild(ytSection);
+
+    /* ─ 4. 使い方 ─ */
     const guideSection = section("使い方");
     guideSection.appendChild(el("div", { class: "setting-guide", html: `
       <p>URLを「+ 追加」欄に貼り付けると、サービスを自動判別して追加します。</p>
@@ -186,7 +221,7 @@ const Settings = (() => {
     ` }));
     container.appendChild(guideSection);
 
-    /* ─ 4. 利用規約 ─ */
+    /* ─ 5. 利用規約 ─ */
     const tosSection = section("利用規約");
     tosSection.appendChild(el("div", { class: "setting-guide", html: `
       <p>本アプリは個人利用を目的として作成されています。</p>
@@ -200,7 +235,7 @@ const Settings = (() => {
     ` }));
     container.appendChild(tosSection);
 
-    /* ─ 5. 作成者 ─ */
+    /* ─ 6. 作成者 ─ */
     const aboutSection = section("作成者");
     aboutSection.appendChild(el("div", { class: "setting-about", html: `
       <div class="setting-creator">

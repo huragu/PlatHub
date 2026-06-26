@@ -254,6 +254,32 @@
   }
   startYtPoll();
 
+  /**
+   * Fetch all videos in a YouTube playlist via the Cloudflare Worker proxy.
+   * Worker endpoint:  GET {workerUrl}/playlist?id={playlistId}
+   * Response JSON:    { playlistTitle, videos: [{id, title, channelTitle}] }
+   */
+  async function fetchYouTubePlaylist(playlistId, workerUrl) {
+    const base = workerUrl.replace(/\/$/, "");
+    const endpoint = `${base}/playlist?id=${encodeURIComponent(playlistId)}`;
+    let res;
+    try {
+      res = await fetch(endpoint);
+    } catch (e) {
+      throw new Error(`Workerへの接続に失敗しました（${e.message}）`);
+    }
+    if (!res.ok) {
+      let detail = "";
+      try { const j = await res.json(); detail = j.error || ""; } catch {}
+      throw new Error(`Worker エラー（HTTP ${res.status}）${detail ? ": " + detail : ""}`);
+    }
+    const data = await res.json();
+    if (!data.videos?.length) {
+      throw new Error("プレイリストに動画が見つかりませんでした（非公開の可能性があります）");
+    }
+    return data;
+  }
+
   /* ════════════════════════════════════════════
      Tab visibility change handling
      ─────────────────────────────────────────
@@ -571,8 +597,76 @@
 
     if (service === "youtube") {
       const vid = Services.extractYouTubeId(url);
+
+      // YouTube playlist URL (no video ID, or list= without v=)
+      const playlistId = Services.extractYouTubePlaylistId(url);
+      const isPlaylistOnly = playlistId && !vid;
+
+      if (isPlaylistOnly) {
+        // プレイリスト一括追加
+        const workerUrl = appSettings.yt_worker_url || "";
+        if (!workerUrl) {
+          showAddError(
+            "YouTubeプレイリストの一括追加にはCloudflare Workerの設定が必要です。設定画面（⚙）の「YouTube設定」からWorker URLを入力してください。"
+          );
+          return;
+        }
+        setAddTrackLoading(true, "YouTubeプレイリストを取得中…");
+        try {
+          const result = await fetchYouTubePlaylist(playlistId, workerUrl);
+          setAddTrackLoading(false);
+          openBulkImportPreview({
+            collectionName: result.playlistTitle,
+            serviceLabel: "YouTube",
+            sourceUrl: url,
+            items: result.videos.map((v) => ({
+              service: "youtube",
+              sourceId: v.id,
+              url: `https://www.youtube.com/watch?v=${v.id}`,
+              title: v.title,
+              artist: v.channelTitle || "",
+            })),
+          });
+        } catch (e) {
+          setAddTrackLoading(false);
+          showAddError(e.message || "プレイリストの取得に失敗しました");
+        }
+        return;
+      }
+
       if (!vid) { showAddError("YouTubeのURLを確認してください（例: youtube.com/watch?v=XXXXX）"); return; }
-      commitNewTrack({ service: "youtube", sourceId: vid, url, title: addTitleInput.value.trim() || `YouTube: ${vid}`, artist: "" });
+
+      const manualTitle = addTitleInput.value.trim();
+      if (manualTitle) {
+        // User typed a title — skip the oEmbed round-trip
+        commitNewTrack({ service: "youtube", sourceId: vid, url, title: manualTitle, artist: "" });
+        return;
+      }
+
+      // Fetch the real video title via YouTube's oEmbed endpoint (no API key needed)
+      setAddTrackLoading(true, "YouTubeからタイトルを取得中…");
+      try {
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+        const res = await fetch(oembedUrl);
+        if (res.ok) {
+          const data = await res.json();
+          commitNewTrack({
+            service: "youtube",
+            sourceId: vid,
+            url,
+            title: data.title || `YouTube: ${vid}`,
+            artist: data.author_name || "",
+          });
+        } else {
+          // oEmbed failed (e.g. private video) — fall back to generic title
+          commitNewTrack({ service: "youtube", sourceId: vid, url, title: `YouTube: ${vid}`, artist: "" });
+        }
+      } catch {
+        // Network error — still add the track with a generic title
+        commitNewTrack({ service: "youtube", sourceId: vid, url, title: `YouTube: ${vid}`, artist: "" });
+      } finally {
+        setAddTrackLoading(false);
+      }
       return;
     }
 
@@ -1209,9 +1303,13 @@
     titleEl.textContent = t.title;
     titleEl.title = "ダブルクリックでタイトルを編集";
 
+    // The rename gesture lives on titleEl only.
+    // We block click→play by stopping propagation from titleEl on dblclick.
+    let renaming = false;
     titleEl.addEventListener("dblclick", (e) => {
-      e.stopPropagation();
-      startInlineRename(titleEl, t);
+      e.stopPropagation(); // prevent item's click handler from firing
+      renaming = true;
+      startInlineRename(titleEl, t, () => { renaming = false; });
     });
 
     meta.appendChild(titleEl);
@@ -1231,19 +1329,13 @@
     removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeTrack(t.id); });
     item.appendChild(removeBtn);
 
-    let clickTimer = null;
+    // Single click on the item plays the track.
+    // The rename input's own click handler stops propagation, so
+    // clicking inside an active input does NOT re-trigger playback.
     item.addEventListener("click", (e) => {
-      // Ignore if we're clicking inside an active rename input
       if (e.target.classList.contains("track-title-input")) return;
-      // Use a short delay to distinguish single-click (play) from dblclick (rename)
-      // The dblclick handler will clearTimeout if it fires first.
-      clearTimeout(clickTimer);
-      clickTimer = setTimeout(() => playTrack(t), 180);
-    });
-    item.addEventListener("dblclick", (e) => {
-      if (e.target.classList.contains("track-title") || e.target.closest(".track-title")) {
-        clearTimeout(clickTimer); // cancel the single-click play
-      }
+      if (renaming) return; // dblclick in progress — don't play
+      playTrack(t);
     });
     return item;
   }
@@ -1252,7 +1344,7 @@
    * Replace a track title <div> with an <input>, commit on Enter/blur,
    * cancel on Escape.
    */
-  function startInlineRename(titleEl, track) {
+  function startInlineRename(titleEl, track, onDone) {
     const original = track.title;
 
     const input = document.createElement("input");
@@ -1266,6 +1358,7 @@
 
     const commit = () => {
       if (cancelled) return;
+      onDone && onDone();
       const newTitle = input.value.trim();
       if (newTitle && newTitle !== original) {
         renameTrack(track.id, newTitle);
@@ -1279,7 +1372,8 @@
       if (e.key === "Escape") {
         e.preventDefault();
         cancelled = true;
-        renderAll(); // restore without saving
+        onDone && onDone();
+        renderAll();
       }
     });
     input.addEventListener("blur", commit);

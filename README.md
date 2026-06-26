@@ -137,3 +137,108 @@ mixcast/
   でログインした場合、再生時に「Premiumアカウントが必要です」というエラーが出ます。
 - YouTube再生がうまくいかない場合、ブラウザの開発者ツール（F12）のConsoleタブに
   エラーが出ていればその内容を教えてください。原因を特定しやすくなります。
+
+## YouTubeプレイリスト一括追加 — Cloudflare Worker の設定
+
+プレイリストURLを貼るだけで全動画を一括追加したい場合、Cloudflare Worker を使います。
+
+### Worker の作成手順
+
+1. [https://dash.cloudflare.com](https://dash.cloudflare.com) にアクセスしてアカウント作成（無料）
+2. **Workers & Pages** → **Create** → **Create Worker**
+3. 以下のコードをそのまま貼り付けて **Save and deploy**
+
+```js
+// PlatHub — YouTube Playlist Worker
+// Cloudflare Worker: proxies YouTube Data API v3 calls for playlist expansion.
+// Set the environment variable YT_API_KEY to your YouTube Data API key.
+//   (Workers → Settings → Variables → Add variable: YT_API_KEY)
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+};
+
+export default {
+  async fetch(request, env) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: CORS });
+    }
+
+    const url = new URL(request.url);
+    if (url.pathname !== "/playlist") {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404, headers: { ...CORS, "Content-Type": "application/json" },
+      });
+    }
+
+    const playlistId = url.searchParams.get("id");
+    if (!playlistId) {
+      return new Response(JSON.stringify({ error: "id parameter required" }), {
+        status: 400, headers: { ...CORS, "Content-Type": "application/json" },
+      });
+    }
+
+    const apiKey = env.YT_API_KEY;
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: "YT_API_KEY not configured" }), {
+        status: 500, headers: { ...CORS, "Content-Type": "application/json" },
+      });
+    }
+
+    // Fetch playlist metadata
+    const metaRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/playlists?part=snippet&id=${playlistId}&key=${apiKey}`
+    );
+    const metaData = await metaRes.json();
+    const playlistTitle = metaData.items?.[0]?.snippet?.title || "YouTube Playlist";
+
+    // Fetch all playlist items (paginate up to 500 videos)
+    const videos = [];
+    let pageToken = "";
+    while (videos.length < 500) {
+      const ytUrl = `https://www.googleapis.com/youtube/v3/playlistItems`
+        + `?part=snippet&maxResults=50&playlistId=${playlistId}&key=${apiKey}`
+        + (pageToken ? `&pageToken=${pageToken}` : "");
+      const res = await fetch(ytUrl);
+      const data = await res.json();
+      if (!res.ok) {
+        return new Response(JSON.stringify({ error: data.error?.message || "YouTube API error" }), {
+          status: 500, headers: { ...CORS, "Content-Type": "application/json" },
+        });
+      }
+      for (const item of data.items || []) {
+        const vid = item.snippet?.resourceId?.videoId;
+        if (vid) {
+          videos.push({
+            id: vid,
+            title: item.snippet.title,
+            channelTitle: item.snippet.videoOwnerChannelTitle || "",
+          });
+        }
+      }
+      if (!data.nextPageToken) break;
+      pageToken = data.nextPageToken;
+    }
+
+    return new Response(JSON.stringify({ playlistTitle, videos }), {
+      headers: { ...CORS, "Content-Type": "application/json" },
+    });
+  },
+};
+```
+
+4. Worker の設定画面 → **Variables** → **Add variable**
+   - Variable name: `YT_API_KEY`
+   - Value: YouTube Data API v3 のキー（[Google Cloud Console](https://console.cloud.google.com/) で発行）
+
+5. Worker の URL（`https://your-worker.your-name.workers.dev`）を PlatHub の設定画面（⚙）→「YouTube」→「プレイリスト取得 Worker URL」に貼り付け
+
+### YouTube Data API キーの取得
+
+1. [Google Cloud Console](https://console.cloud.google.com/) で新しいプロジェクトを作成
+2. **APIとサービス** → **ライブラリ** → **YouTube Data API v3** を有効化
+3. **APIとサービス** → **認証情報** → **APIキーを作成**
+4. （推奨）作成したキーのリファクタリング制限に Cloudflare Workers のドメインを追加
+
+無料枠：YouTube Data API v3 は1日10,000ユニット無料。プレイリスト取得は約1–3ユニット/リクエストなので、個人利用では無制限に近い。

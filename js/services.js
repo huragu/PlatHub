@@ -50,8 +50,19 @@ const Services = (() => {
     return /\.(mp3|m4a|aac|ogg|opus|wav|flac)$/i.test(path);
   }
 
+  /**
+   * Extract a YouTube video ID from a URL.
+   */
   function extractYouTubeId(url) {
     const m = url.match(/(?:v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    return m ? m[1] : null;
+  }
+
+  /**
+   * Extract a YouTube playlist ID (list= parameter) from a URL.
+   */
+  function extractYouTubePlaylistId(url) {
+    const m = url.match(/[?&]list=([A-Za-z0-9_-]+)/);
     return m ? m[1] : null;
   }
 
@@ -100,7 +111,8 @@ const Services = (() => {
   }
 
   return {
-    detect, isDirectAudioUrl, extractYouTubeId, extractApplePodcastIds, extractSpotifyTrackId,
+    detect, isDirectAudioUrl, extractYouTubeId, extractYouTubePlaylistId,
+    extractApplePodcastIds, extractSpotifyTrackId,
     badgeHTML, badgeEl, formatTime, META,
   };
 })();
