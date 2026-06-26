@@ -382,23 +382,34 @@
   }
 
   /* ── Shuffle queue ──────────────────────────────────────── */
-  // Instead of calling shuffleQueue.indexOf(currentTrackId) on every
-  // nextTrack() call (which can silently return -1 and cause the queue
-  // to rebuild on every step), we keep an explicit cursor into the queue.
+  // We keep an explicit integer cursor (shuffleQueueIndex) into shuffleQueue
+  // rather than using indexOf() on every step. This avoids the -1 trap
+  // that previously caused constant queue rebuilds and always returning
+  // shuffleQueue[1].
+  //
+  // buildShuffleQueue() uses pure Fisher-Yates — no front-pinning of
+  // currentTrackId. Front-pinning (shuffle first, then splice current
+  // track to position 0) statistically elevates the probability of the
+  // track that happened to land at index 1 after the splice, creating
+  // audible bias. Without pinning every slot has exactly equal probability.
+  //
+  // Cursor starts at -1 ("before the first track"). nextTrack() advances
+  // it to 0 on the very first call, so shuffleQueue[0] is the first song.
   let shuffleQueueIndex = -1;
 
   function buildShuffleQueue() {
-    const tracks = getTracks();
-    const ids = tracks.map((t) => t.id);
+    const ids = getTracks().map((t) => t.id);
+    // Pure Fisher-Yates — unbiased, every permutation equally likely
     for (let i = ids.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [ids[i], ids[j]] = [ids[j], ids[i]];
     }
     shuffleQueue = ids;
-    // Position the cursor on the current track if it's in the new queue,
-    // otherwise start from the beginning.
-    const pos = currentTrackId ? ids.indexOf(currentTrackId) : -1;
-    shuffleQueueIndex = pos >= 0 ? pos : 0;
+    // Cursor reset: -1 means "call nextTrack() to get the first song".
+    // This is intentional: the caller (toggleRadioMode autostart, or
+    // the user pressing ⏭ while shuffle is off then turning it on)
+    // will always go through nextTrack() before playing anything.
+    shuffleQueueIndex = -1;
   }
 
   function nextTrack(forceNext = false) {
@@ -408,32 +419,27 @@
     if (repeatMode === "one" && !forceNext) return getCurrentTrack() || null;
 
     if (shuffleMode) {
-      // Rebuild the queue if it's empty or stale (e.g. tracks were added).
-      if (!shuffleQueue.length) {
-        buildShuffleQueue();
-      }
+      if (!shuffleQueue.length) buildShuffleQueue();
 
-      // If the cursor is out of range (should not normally happen), reset it.
-      if (shuffleQueueIndex < 0 || shuffleQueueIndex >= shuffleQueue.length) {
+      const isBeforeStart = shuffleQueueIndex === -1;
+      const isLast        = shuffleQueueIndex === shuffleQueue.length - 1;
+
+      if (!isBeforeStart && !radioMode && repeatMode === "none" && isLast) return null;
+
+      if (!isBeforeStart && isLast && (radioMode || repeatMode === "all")) {
+        // Full loop done — re-shuffle for a fresh random order.
+        const justPlayedId = shuffleQueue[shuffleQueueIndex];
+        buildShuffleQueue(); // resets cursor to -1
+        // Avoid starting the new loop with the same track that just finished.
+        if (shuffleQueue.length > 1 && shuffleQueue[0] === justPlayedId) {
+          [shuffleQueue[0], shuffleQueue[1]] = [shuffleQueue[1], shuffleQueue[0]];
+        }
         shuffleQueueIndex = 0;
-      }
-
-      const isLast = shuffleQueueIndex === shuffleQueue.length - 1;
-
-      if (!radioMode && repeatMode === "none" && isLast) return null;
-
-      if (isLast && (radioMode || repeatMode === "all")) {
-        // Re-shuffle for a fresh random order on the next loop.
-        buildShuffleQueue();
-        // After rebuild, cursor is on currentTrack (index 0).
-        // Advance past it so we don't repeat the just-played track immediately.
-        shuffleQueueIndex = shuffleQueue.length > 1 ? 1 : 0;
       } else {
-        shuffleQueueIndex = (shuffleQueueIndex + 1) % shuffleQueue.length;
+        shuffleQueueIndex = Math.max(0, shuffleQueueIndex + 1);
       }
 
-      const nextId = shuffleQueue[shuffleQueueIndex];
-      return tracks.find((t) => t.id === nextId) || null;
+      return tracks.find((t) => t.id === shuffleQueue[shuffleQueueIndex]) || null;
     }
 
     const idx = getCurrentIndex();
@@ -518,15 +524,14 @@
       // シャッフルで開始する設定がオンで、かつ現在シャッフルがオフなら有効にする
       if (appSettings.radio_shuffle_on_start && !shuffleMode) {
         shuffleMode = true;
-        buildShuffleQueue();
+        buildShuffleQueue();  // cursor → -1
         persistPlayerPrefs();
       }
 
       // 自動再生開始設定がオンで、現在再生中でなければ先頭から再生
       if (appSettings.radio_autostart && !playing && getTracks().length > 0) {
-        const firstTrack = shuffleMode
-          ? (getTracks().find(t => t.id === shuffleQueue[0]) || getTracks()[0])
-          : getTracks()[0];
+        // Use nextTrack() so the cursor advances correctly from -1 → 0
+        const firstTrack = shuffleMode ? nextTrack(false) : getTracks()[0];
         if (firstTrack) playTrack(firstTrack);
       }
     }
