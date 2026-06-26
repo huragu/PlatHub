@@ -382,34 +382,57 @@
   }
 
   /* ── Shuffle queue ──────────────────────────────────────── */
+  // Instead of calling shuffleQueue.indexOf(currentTrackId) on every
+  // nextTrack() call (which can silently return -1 and cause the queue
+  // to rebuild on every step), we keep an explicit cursor into the queue.
+  let shuffleQueueIndex = -1;
+
   function buildShuffleQueue() {
     const tracks = getTracks();
     const ids = tracks.map((t) => t.id);
-    // Fisher-Yates shuffle, keeping currentTrackId first
     for (let i = ids.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [ids[i], ids[j]] = [ids[j], ids[i]];
     }
-    // Move currentTrackId to front if present
-    const ci = ids.indexOf(currentTrackId);
-    if (ci > 0) { ids.splice(ci, 1); ids.unshift(currentTrackId); }
     shuffleQueue = ids;
+    // Position the cursor on the current track if it's in the new queue,
+    // otherwise start from the beginning.
+    const pos = currentTrackId ? ids.indexOf(currentTrackId) : -1;
+    shuffleQueueIndex = pos >= 0 ? pos : 0;
   }
 
   function nextTrack(forceNext = false) {
     const tracks = getTracks();
     if (!tracks.length) return null;
 
-    // 1曲リピート（forceNext=trueは⏭ボタンで明示的にスキップ）
     if (repeatMode === "one" && !forceNext) return getCurrentTrack() || null;
 
     if (shuffleMode) {
-      if (!shuffleQueue.length) buildShuffleQueue();
-      const ci = shuffleQueue.indexOf(currentTrackId);
-      const ni = (ci + 1) % shuffleQueue.length;
-      const nextId = shuffleQueue[ni];
-      // リピートなし+最後まで行ったら止まる
-      if (!radioMode && repeatMode === "none" && ci === shuffleQueue.length - 1) return null;
+      // Rebuild the queue if it's empty or stale (e.g. tracks were added).
+      if (!shuffleQueue.length) {
+        buildShuffleQueue();
+      }
+
+      // If the cursor is out of range (should not normally happen), reset it.
+      if (shuffleQueueIndex < 0 || shuffleQueueIndex >= shuffleQueue.length) {
+        shuffleQueueIndex = 0;
+      }
+
+      const isLast = shuffleQueueIndex === shuffleQueue.length - 1;
+
+      if (!radioMode && repeatMode === "none" && isLast) return null;
+
+      if (isLast && (radioMode || repeatMode === "all")) {
+        // Re-shuffle for a fresh random order on the next loop.
+        buildShuffleQueue();
+        // After rebuild, cursor is on currentTrack (index 0).
+        // Advance past it so we don't repeat the just-played track immediately.
+        shuffleQueueIndex = shuffleQueue.length > 1 ? 1 : 0;
+      } else {
+        shuffleQueueIndex = (shuffleQueueIndex + 1) % shuffleQueue.length;
+      }
+
+      const nextId = shuffleQueue[shuffleQueueIndex];
       return tracks.find((t) => t.id === nextId) || null;
     }
 
@@ -471,8 +494,12 @@
 
   function toggleShuffle() {
     shuffleMode = !shuffleMode;
-    if (shuffleMode) buildShuffleQueue();
-    else shuffleQueue = [];
+    if (shuffleMode) {
+      buildShuffleQueue();
+    } else {
+      shuffleQueue = [];
+      shuffleQueueIndex = -1;
+    }
     persistPlayerPrefs();
     renderPlaybackModeUI();
   }
@@ -936,7 +963,8 @@
     position = 0;
     duration = 0;
     pendingNextTrack = null;
-    shuffleQueue = [];          // reset shuffle queue for the new playlist
+    shuffleQueue = [];
+    shuffleQueueIndex = -1;
 
     state.activePlaylistId = id;
     persist();
