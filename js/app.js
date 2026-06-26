@@ -176,16 +176,21 @@
     playerError = "";
     if (!t) { stopAllEngines(); return; }
 
+    // Compute per-platform effective volume
+    const volYT      = Math.min(1, volume * (appSettings.vol_youtube ?? 1));
+    const volAudio   = Math.min(1, volume * (appSettings.vol_podcast ?? 1));
+    const volSpotify = Math.min(1, volume * (appSettings.vol_spotify ?? 1));
+
     if (t.service === "youtube") {
       AudioEngine.pause();
       if (SpotifyEngine.isReady) SpotifyEngine.pause();
       if (ytHostEl) {
-        YouTubeEngine.load(ytHostEl, t.sourceId, volume, playing);
+        YouTubeEngine.load(ytHostEl, t.sourceId, volYT, playing);
       }
     } else if (t.service === "direct_audio") {
       YouTubeEngine.destroy();
       if (SpotifyEngine.isReady) SpotifyEngine.pause();
-      AudioEngine.load(t.sourceId, volume, playing);
+      AudioEngine.load(t.sourceId, volAudio, playing);
     } else if (t.service === "spotify_track") {
       YouTubeEngine.destroy();
       AudioEngine.pause();
@@ -194,7 +199,7 @@
         renderPlayerPanels();
         return;
       }
-      SpotifyEngine.load(t.sourceId, volume, playing);
+      SpotifyEngine.load(t.sourceId, volSpotify, playing);
     }
   }
 
@@ -482,20 +487,15 @@
   function toggleRadioMode() {
     radioMode = !radioMode;
 
-    // Apply settings when RADIO is turned ON
     if (radioMode) {
-      // Shuffle: "on" → force on, "off" → force off, "inherit" → leave as-is
-      if (appSettings.radio_shuffle === "on" && !shuffleMode) {
+      // シャッフルで開始する設定がオンで、かつ現在シャッフルがオフなら有効にする
+      if (appSettings.radio_shuffle_on_start && !shuffleMode) {
         shuffleMode = true;
         buildShuffleQueue();
         persistPlayerPrefs();
-      } else if (appSettings.radio_shuffle === "off" && shuffleMode) {
-        shuffleMode = false;
-        shuffleQueue = [];
-        persistPlayerPrefs();
       }
 
-      // Auto-start: begin playback if nothing is playing
+      // 自動再生開始設定がオンで、現在再生中でなければ先頭から再生
       if (appSettings.radio_autostart && !playing && getTracks().length > 0) {
         const firstTrack = shuffleMode
           ? (getTracks().find(t => t.id === shuffleQueue[0]) || getTracks()[0])
@@ -924,6 +924,20 @@
   }
 
   function selectPlaylist(id) {
+    if (state.activePlaylistId === id) return; // already active, no-op
+
+    // Stop playback from the old playlist before switching, so the engine
+    // doesn't keep playing a track that no longer belongs to the active list.
+    if (playing) {
+      stopAllEngines();
+      playing = false;
+    }
+    currentTrackId = null;
+    position = 0;
+    duration = 0;
+    pendingNextTrack = null;
+    shuffleQueue = [];          // reset shuffle queue for the new playlist
+
     state.activePlaylistId = id;
     persist();
     if (isMobile()) setMobileTab("tracks");

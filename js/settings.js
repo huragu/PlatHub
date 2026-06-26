@@ -18,16 +18,11 @@ const Settings = (() => {
   const SETTINGS_KEY = "plathub_settings_v1";
 
   const DEFAULT = {
-    // Per-platform volume (0.0 – 1.0).
-    // "master" is the main slider already in the player bar.
-    // Platform offsets let users balance e.g. loud YouTube vs quiet podcast.
-    vol_youtube:  1.0,
-    vol_spotify:  1.0,
-    vol_podcast:  1.0,
-
-    // Radio / autoplay behaviour
-    radio_autostart: false,      // Start playback automatically when RADIO is turned ON
-    radio_shuffle:   "inherit",  // "inherit" | "on" | "off"   (when radio auto-starts)
+    vol_youtube:          1.0,
+    vol_spotify:          1.0,
+    vol_podcast:          1.0,
+    radio_autostart:      false,
+    radio_shuffle_on_start: false,  // when radio auto-starts, start with shuffle on?
   };
 
   /* ── Persistence ── */
@@ -116,25 +111,6 @@ const Settings = (() => {
     return label;
   }
 
-  function radioGroup(name, options, current, onChange) {
-    const wrap = el("div", { class: "setting-radio-group" });
-    options.forEach(({ value, label }) => {
-      const id = `${name}_${value}`;
-      const optLabel = el("label", { class: "setting-radio-option", for: id });
-      const input = el("input");
-      input.type = "radio";
-      input.name = name;
-      input.id = id;
-      input.value = value;
-      input.checked = current === value;
-      input.addEventListener("change", () => { if (input.checked) onChange(value); });
-      optLabel.appendChild(input);
-      optLabel.appendChild(document.createTextNode(label));
-      wrap.appendChild(optLabel);
-    });
-    return wrap;
-  }
-
   /* ── Main render ── */
 
   function render(container, prefs, onPrefsChange) {
@@ -179,31 +155,17 @@ const Settings = (() => {
         prefs.radio_autostart = v;
         onPrefsChange(prefs);
       }),
-      "RADIOをオンにすると同時に再生を開始します"
+      "📻 RADIOをオンにしたときに先頭から自動で再生を始める"
     ));
 
-    const shuffleLabel = el("div", { class: "setting-row-label" }, "自動再生時のシャッフル");
-    const shuffleDesc = el("div", { class: "setting-row-desc" }, "RADIO 自動再生開始時のシャッフル設定");
-    shuffleLabel.appendChild(shuffleDesc);
-
-    const shuffleGroup = radioGroup(
-      "radio_shuffle",
-      [
-        { value: "inherit", label: "現在の設定を引き継ぐ" },
-        { value: "on",      label: "強制オン" },
-        { value: "off",     label: "強制オフ" },
-      ],
-      prefs.radio_shuffle,
-      v => {
-        prefs.radio_shuffle = v;
+    radioSection.appendChild(row(
+      "自動再生をシャッフルで開始",
+      toggle("radio_shuffle_on_start", prefs.radio_shuffle_on_start, v => {
+        prefs.radio_shuffle_on_start = v;
         onPrefsChange(prefs);
-      }
-    );
-
-    const shuffleRow = el("div", { class: "setting-row setting-row-col" });
-    shuffleRow.appendChild(shuffleLabel);
-    shuffleRow.appendChild(shuffleGroup);
-    radioSection.appendChild(shuffleRow);
+      }),
+      "🔀 自動再生開始時にシャッフルをオンにする（「RADIO ON 時に自動再生開始」が有効のとき機能します）"
+    ));
 
     container.appendChild(radioSection);
 
