@@ -1,9 +1,3 @@
-/* ════════════════════════════════════════════════════════
-   youtube-engine.js — YouTube IFrame Player API wrapper
-   Requires a *visible* DOM host element (YT API rejects
-   zero-size / display:none containers in some browsers).
-════════════════════════════════════════════════════════ */
-
 const YouTubeEngine = (() => {
   let player = null;
   let hostEl = null;
@@ -12,6 +6,7 @@ const YouTubeEngine = (() => {
   let onEndedCb = null;
   let onReadyCb = null;
   let onErrorCb = null;
+  let endFired = false;  // guard against double-fire during destroy/reload
 
   function isApiReady() {
     return !!(window.YT && window.YT.Player);
@@ -21,7 +16,6 @@ const YouTubeEngine = (() => {
     if (isApiReady()) { cb(); return; }
     window.__ytReadyQueue = window.__ytReadyQueue || [];
     window.__ytReadyQueue.push(cb);
-    // The iframe_api script tag in index.html will eventually call this.
     if (!window.onYouTubeIframeAPIReady) {
       window.onYouTubeIframeAPIReady = () => {
         (window.__ytReadyQueue || []).forEach((fn) => fn());
@@ -38,16 +32,10 @@ const YouTubeEngine = (() => {
     ready = false;
   }
 
-  /**
-   * Load (or reload) a video into the given host element.
-   * @param {HTMLElement} el - visible container element
-   * @param {string} videoId
-   * @param {number} volume - 0..1
-   * @param {boolean} autoplay
-   */
   function load(el, videoId, volume, autoplay) {
     hostEl = el;
     pendingPlayState = autoplay;
+    endFired = false;   // new track — reset the guard
     destroy();
 
     waitForApi(() => {
@@ -71,7 +59,8 @@ const YouTubeEngine = (() => {
             onReadyCb && onReadyCb();
           },
           onStateChange(e) {
-            if (e.data === window.YT.PlayerState.ENDED) {
+            if (e.data === window.YT.PlayerState.ENDED && !endFired) {
+              endFired = true;
               onEndedCb && onEndedCb();
             }
           },
@@ -83,7 +72,21 @@ const YouTubeEngine = (() => {
               101: "この動画は埋め込みが許可されていません",
               150: "この動画は埋め込みが許可されていません",
             };
-            onErrorCb && onErrorCb(messages[e.data] || `YouTubeエラー (code ${e.data})`);
+            const msg = messages[e.data];
+            if (!msg) return; // ignore unknown/transient codes (e.g. during init)
+            // Small delay: if the player recovers and starts playing within
+            // 1.5s, the error was transient and we don't surface it.
+            setTimeout(() => {
+              if (!ready || !player) return; // already destroyed
+              try {
+                const state = player.getPlayerState();
+                // Only show error if not currently playing or buffering
+                if (state !== window.YT.PlayerState.PLAYING &&
+                    state !== window.YT.PlayerState.BUFFERING) {
+                  onErrorCb && onErrorCb(msg);
+                }
+              } catch (_) {}
+            }, 1500);
           },
         },
       });

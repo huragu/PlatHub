@@ -222,8 +222,7 @@
       YouTubeEngine.destroy();
       AudioEngine.pause();
       if (!SpotifyAuth.isLoggedIn()) {
-        playerError = "Spotifyにログインしていません。ヘッダーの「Spotifyでログイン」から認証してください";
-        renderPlayerPanels();
+        showToast("Spotifyにログインしていません。ヘッダーの「Spotifyでログイン」から認証してください");
         return;
       }
       SpotifyEngine.load(t.sourceId, volSpotify, playing);
@@ -231,9 +230,9 @@
   }
 
   YouTubeEngine.onEnded(() => handleTrackEnded());
-  YouTubeEngine.onError((msg) => { playerError = msg; renderPlayerPanels(); });
+  YouTubeEngine.onError((msg) => showToast(`⚠ ${msg}`, { duration: 5000 }));
   AudioEngine.onEnded(() => handleTrackEnded());
-  AudioEngine.onError((msg) => { playerError = msg; renderPlayerPanels(); });
+  AudioEngine.onError((msg) => showToast(`⚠ ${msg}`, { duration: 5000 }));
   AudioEngine.onTime((cur, dur) => {
     if (activeEngine() === "audio") {
       position = cur; duration = dur || duration;
@@ -245,8 +244,8 @@
   });
 
   SpotifyEngine.onEnded(() => handleTrackEnded());
-  SpotifyEngine.onError((msg) => { playerError = msg; renderPlayerPanels(); });
-  SpotifyEngine.onNotPremium(() => { renderSpotifyAuthUI(); });
+  SpotifyEngine.onError((msg) => showToast(`⚠ ${msg}`, { duration: 5000 }));
+  SpotifyEngine.onNotPremium(() => { renderSpotifyAuthUI(); showToast("⚠ Spotify Premiumアカウントが必要です", { duration: 5000 }); });
 
   AudioEngine.onPlayBlocked(() => {
     // play() was rejected (autoplay policy, likely backgrounded tab).
@@ -985,7 +984,7 @@
    * where the inline #addError banner inside the form isn't visible.
    */
   let toastTimer = null;
-  function showToast(message) {
+  function showToast(message, { duration = 3000 } = {}) {
     clearTimeout(toastTimer);
     toastEl.textContent = message;
     toastEl.hidden = false;
@@ -993,7 +992,7 @@
     toastTimer = setTimeout(() => {
       toastEl.classList.remove("visible");
       setTimeout(() => { toastEl.hidden = true; }, 250);
-    }, 3000);
+    }, duration);
   }
 
   function commitNewTrack({ service, sourceId, url, title, artist }) {
@@ -1461,8 +1460,8 @@
   function renderPlayerPanelContent(pp) {
     const t = getCurrentTrack();
 
-    pp.errorEl.hidden = !playerError;
-    pp.errorEl.textContent = playerError ? `⚠ ${playerError}` : "";
+    // pp-error is kept hidden — errors are now routed to the toast notification
+    pp.errorEl.hidden = true;
 
     pp.ytWrap.hidden = !(t && t.service === "youtube");
     pp.waveformEl.hidden = !(t && t.service === "direct_audio");
