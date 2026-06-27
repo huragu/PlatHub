@@ -80,5 +80,26 @@ const Storage = (() => {
     }
   }
 
-  return { load, save, loadPrefs, savePrefs };
+  /* ── Playback session (sessionStorage) ──
+     Saved just before Spotify OAuth redirect so the app can
+     resume playback when callback.html redirects back.
+     sessionStorage is cleared automatically when the tab closes. */
+  const SESSION_KEY = "plathub_playback_session_v1";
+
+  function savePlaybackSession(session) {
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    } catch {}
+  }
+
+  function loadPlaybackSession() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      if (!raw) return null;
+      sessionStorage.removeItem(SESSION_KEY); // consume once
+      return JSON.parse(raw);
+    } catch { return null; }
+  }
+
+  return { load, save, loadPrefs, savePrefs, savePlaybackSession, loadPlaybackSession };
 })();

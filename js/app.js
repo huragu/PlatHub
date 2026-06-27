@@ -11,6 +11,14 @@
   let mobileTab = "tracks"; // "playlists" | "tracks" | "player" | "settings"
 
   let currentTrackId = null;
+
+  // viewPlaylistId  → which playlist is shown in the track list (UI)
+  // playingPlaylistId → which playlist owns the currently playing track
+  // They start equal but diverge when the user browses other playlists
+  // while something is playing.
+  let viewPlaylistId    = state.activePlaylistId || state.playlists[0]?.id;
+  let playingPlaylistId = viewPlaylistId;
+
   let playing = false;
   let volume = _prefs.volume;
   let shuffleMode = _prefs.shuffle;
@@ -124,11 +132,29 @@
   /* ════════════════════════════════════════════
      Derived state helpers
   ════════════════════════════════════════════ */
-  function getActivePlaylist() {
-    return state.playlists.find((p) => p.id === state.activePlaylistId) || state.playlists[0];
+  // ── Playlist / track accessors ───────────────────────────
+  // "view" = what the user is currently browsing/editing
+  // "playing" = what is actually producing sound
+
+  function getViewPlaylist() {
+    return state.playlists.find((p) => p.id === viewPlaylistId)
+      || state.playlists[0];
+  }
+  function getViewTracks() {
+    return getViewPlaylist()?.tracks || [];
+  }
+
+  // Kept for backwards-compat with code that adds/edits tracks in
+  // the visible list (commitNewTrack, removeTrack, renameTrack, etc.)
+  function getActivePlaylist() { return getViewPlaylist(); }
+
+  function getPlayingPlaylist() {
+    return state.playlists.find((p) => p.id === playingPlaylistId)
+      || state.playlists[0];
   }
   function getTracks() {
-    return getActivePlaylist()?.tracks || [];
+    // Playback logic always operates on the playing playlist.
+    return getPlayingPlaylist()?.tracks || [];
   }
   function getCurrentTrack() {
     return getTracks().find((t) => t.id === currentTrackId) || null;
@@ -137,6 +163,7 @@
     return getTracks().findIndex((t) => t.id === currentTrackId);
   }
   function persist() {
+    state.activePlaylistId = viewPlaylistId; // backwards compat with stored JSON key
     Storage.save(state);
   }
   function persistPlayerPrefs() {
@@ -382,11 +409,18 @@
     position = 0; duration = 0; playerError = "";
     pendingNextTrack = null;
 
+    // Find which playlist owns this track and make that the playing playlist.
+    // This ensures next/prev/shuffle operate on the right list even when the
+    // user clicked a track in a different playlist while something else was playing.
+    const owningPlaylist = state.playlists.find(
+      (p) => p.tracks.some((t) => t.id === track.id)
+    );
+    if (owningPlaylist) playingPlaylistId = owningPlaylist.id;
+
     if (isMobile()) setMobileTab("player");
     renderAll();
     updateMediaSession(track);
 
-    // renderAll() re-mounts player panel(s) -> grab fresh host el
     requestAnimationFrame(() => {
       const hostEl = getVisibleYtHost();
       loadCurrentTrackIntoEngine(hostEl);
@@ -1043,26 +1077,11 @@
   }
 
   function selectPlaylist(id) {
-    if (state.activePlaylistId === id) return; // already active, no-op
+    if (viewPlaylistId === id) return; // already viewing this list
 
-    // Stop playback and clear all transient state so the new playlist
-    // starts from a clean slate.
-    if (playing) {
-      stopAllEngines();
-      playing = false;
-    }
-    // Also clear the "resume on tab-return" flag so the visibilitychange
-    // handler doesn't restart playback after a playlist switch that
-    // happened while the tab was hidden.
-    wasPlayingBeforeHide = false;
-    pendingNextTrack = null;
-
-    currentTrackId = null;
-    position = 0;
-    duration = 0;
-    shuffleQueue = [];
-    shuffleQueueIndex = -1;
-
+    // Only change what's displayed — never interrupt playback.
+    // The playing playlist (playingPlaylistId) stays untouched.
+    viewPlaylistId = id;
     state.activePlaylistId = id;
     persist();
     if (isMobile()) setMobileTab("tracks");
@@ -1079,9 +1098,21 @@
   function deletePlaylist(id) {
     if (state.playlists.length <= 1) return;
     state.playlists = state.playlists.filter((p) => p.id !== id);
-    if (state.activePlaylistId === id) {
-      state.activePlaylistId = state.playlists[0].id;
+    const fallbackId = state.playlists[0].id;
+
+    // If we were viewing the deleted playlist, switch the view
+    if (viewPlaylistId === id) viewPlaylistId = fallbackId;
+
+    // If the deleted playlist was playing, stop playback cleanly
+    if (playingPlaylistId === id) {
+      stopAllEngines();
+      playing = false;
+      currentTrackId = null;
+      playingPlaylistId = fallbackId;
+      shuffleQueue = [];
+      shuffleQueueIndex = -1;
     }
+
     persist();
     renderAll();
   }
@@ -1175,6 +1206,7 @@
   }
 
   function renderHeader() {
+    // Show the count of the currently playing playlist for context
     trackCountEl.textContent = `${getTracks().length} tracks`;
   }
 
@@ -1197,15 +1229,17 @@
   }
 
   function buildPlaylistItem(pl) {
-    const active = pl.id === state.activePlaylistId;
+    const isViewing = pl.id === viewPlaylistId;
+    const isPlaying = pl.id === playingPlaylistId && currentTrackId;
     const item = document.createElement("div");
-    item.className = `playlist-item${active ? " active" : ""}`;
+    item.className = `playlist-item${isViewing ? " active" : ""}`;
 
     const info = document.createElement("div");
     info.className = "playlist-info";
     const nameEl = document.createElement("div");
     nameEl.className = "playlist-name";
-    nameEl.textContent = pl.name;
+    // Show a small ▶ icon next to the playlist that is currently playing
+    nameEl.textContent = (isPlaying ? "▶ " : "") + pl.name;
     const countEl = document.createElement("div");
     countEl.className = "playlist-count";
     countEl.textContent = `${pl.tracks.length} トラック`;
@@ -1256,13 +1290,13 @@
   }
 
   function renderTracksHeader() {
-    const pl = getActivePlaylist();
+    const pl = getViewPlaylist();
     activePlNameEl.textContent = pl?.name || "";
-    activePlCountEl.textContent = `${getTracks().length} トラック`;
+    activePlCountEl.textContent = `${getViewTracks().length} トラック`;
   }
 
   function renderTrackList() {
-    const tracks = getTracks();
+    const tracks = getViewTracks();
     trackListEl.innerHTML = "";
 
     if (tracks.length === 0) {
@@ -1513,7 +1547,7 @@
   function renderTrackListActiveMarker() {
     // Lightweight: just re-render the ▶/number column without full rebuild
     $$(".track-item").forEach((el, i) => {
-      const tracks = getTracks();
+      const tracks = getViewTracks();
       const t = tracks[i];
       if (!t) return;
       const numEl = el.querySelector(".track-num");
@@ -1646,7 +1680,8 @@
       SpotifyAuth.setClientId(val);
       close();
       renderSpotifyAuthUI();
-      // Immediately start the OAuth login flow with the new Client ID
+      // Save playback state before leaving the page for OAuth
+      savePlaybackSessionIfNeeded();
       try {
         await SpotifyAuth.login();
       } catch (e) {
@@ -1769,7 +1804,8 @@
         promptForClientId();
         return;
       }
-      // Client ID設定済み・未ログイン → ログインフロー開始
+      // Save playback state before leaving the page for OAuth
+      savePlaybackSessionIfNeeded();
       try {
         await SpotifyAuth.login();
       } catch (e) {
@@ -1843,6 +1879,67 @@
     }, 300);
   });
 
+  /**
+   * Persist just enough state to resume playback after a page navigation
+   * (e.g. Spotify OAuth redirect).  Uses sessionStorage so it's cleared
+   * automatically when the browser tab is closed.
+   */
+  function savePlaybackSessionIfNeeded() {
+    if (!currentTrackId) return; // nothing to save
+    Storage.savePlaybackSession({
+      playingPlaylistId,
+      currentTrackId,
+      position: Math.floor(position),
+      wasPlaying: playing,
+      shuffleMode,
+      repeatMode,
+      shuffleQueue,
+      shuffleQueueIndex,
+    });
+  }
+
+  /**
+   * Called once on startup.  If we arrive here from a Spotify OAuth
+   * callback, restore the track that was playing before the redirect
+   * and resume from the saved position.
+   */
+  function restorePlaybackSession() {
+    const session = Storage.loadPlaybackSession();
+    if (!session) return;
+
+    // Validate: the playlist and track must still exist
+    const pl = state.playlists.find((p) => p.id === session.playingPlaylistId);
+    if (!pl) return;
+    const track = pl.tracks.find((t) => t.id === session.currentTrackId);
+    if (!track) return;
+
+    // Restore state
+    playingPlaylistId = session.playingPlaylistId;
+    shuffleMode       = session.shuffleMode ?? shuffleMode;
+    repeatMode        = session.repeatMode  ?? repeatMode;
+    shuffleQueue      = session.shuffleQueue ?? [];
+    shuffleQueueIndex = session.shuffleQueueIndex ?? -1;
+
+    // Start playback from the saved position
+    currentTrackId = track.id;
+    playing        = !!session.wasPlaying;
+    position       = session.position || 0;
+
+    renderAll();
+    updateMediaSession(track);
+
+    requestAnimationFrame(() => {
+      const hostEl = getVisibleYtHost();
+      loadCurrentTrackIntoEngine(hostEl);
+      // Seek to the saved position after a short delay (engine needs to load)
+      if (position > 2) {
+        setTimeout(() => seekTo(position), 1500);
+      }
+    });
+
+    showToast("Spotifyログイン完了。再生を再開します");
+  }
+
   function init() {
     ensureDesktopPanelMounted();
     setMobileTab("tracks");
@@ -1850,7 +1947,12 @@
     applyPlatformVolumes();
 
     if (SpotifyAuth.isLoggedIn()) {
-      SpotifyEngine.init().catch(() => {});
+      // Warm up the Web Playback SDK, then attempt session restore
+      SpotifyEngine.init()
+        .then(() => restorePlaybackSession())
+        .catch(() => restorePlaybackSession()); // restore even if SDK init fails
+    } else {
+      restorePlaybackSession(); // non-Spotify session (shouldn't happen, but safe)
     }
   }
 
