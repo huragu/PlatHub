@@ -584,11 +584,16 @@
         persistPlayerPrefs();
       }
 
-      // 自動再生開始設定がオンで、現在再生中でなければ先頭から再生
-      if (appSettings.radio_autostart && !playing && getTracks().length > 0) {
-        // Use nextTrack() so the cursor advances correctly from -1 → 0
-        const firstTrack = shuffleMode ? nextTrack(false) : getTracks()[0];
-        if (firstTrack) playTrack(firstTrack);
+      // 自動再生開始設定がオンで、現在再生中でなければ表示中のプレイリストから再生
+      if (appSettings.radio_autostart && !playing && getViewTracks().length > 0) {
+        // シャッフルの場合は表示中プレイリストでキューを再構築してから開始
+        if (shuffleMode) {
+          // playingPlaylistId を先に合わせてから buildShuffleQueue を呼ぶ
+          playingPlaylistId = viewPlaylistId;
+          buildShuffleQueue();
+        }
+        const firstTrack = shuffleMode ? nextTrack(false) : getViewTracks()[0];
+        if (firstTrack) playTrack(firstTrack, { syncView: false }); // ビューはそのまま
       }
     }
 
@@ -1483,7 +1488,12 @@
   function getVisibleYtHost() {
     if (isMobile()) {
       ensureMobilePanelMounted();
-      return mobileTab === "player" ? ppMobile.ytHost : null;
+      // On mobile, prefer the player tab's host so the user can see the video.
+      // But if they're on another tab, fall back to the desktop panel's hidden
+      // host so the iframe stays alive and ENDED events keep firing.
+      if (mobileTab === "player") return ppMobile.ytHost;
+      ensureDesktopPanelMounted();
+      return ppDesktop.ytHost; // keeps iframe alive in background
     }
     ensureDesktopPanelMounted();
     return ppDesktop.ytHost;
