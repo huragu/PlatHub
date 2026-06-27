@@ -403,19 +403,23 @@
      Playback control actions
   ════════════════════════════════════════════ */
 
-  function playTrack(track) {
+  function playTrack(track, { syncView = true } = {}) {
     currentTrackId = track.id;
     playing = true;
     position = 0; duration = 0; playerError = "";
     pendingNextTrack = null;
 
     // Find which playlist owns this track and make that the playing playlist.
-    // This ensures next/prev/shuffle operate on the right list even when the
-    // user clicked a track in a different playlist while something else was playing.
     const owningPlaylist = state.playlists.find(
       (p) => p.tracks.some((t) => t.id === track.id)
     );
-    if (owningPlaylist) playingPlaylistId = owningPlaylist.id;
+    if (owningPlaylist) {
+      playingPlaylistId = owningPlaylist.id;
+      // Also sync the view to the playing playlist so the user can
+      // immediately see which track is playing in the list.
+      // This happens for both user-initiated and auto-started playback.
+      if (syncView) viewPlaylistId = owningPlaylist.id;
+    }
 
     if (isMobile()) setMobileTab("player");
     renderAll();
@@ -510,26 +514,22 @@
   }
 
   function skipPrev() {
-    // ⏮ボタン: 再生位置が3秒超なら先頭へ戻す、3秒以内なら前のトラックへ
-    if (position > 3) {
-      seekTo(0);
-      return;
-    }
+    if (position > 3) { seekTo(0); return; }
     const tracks = getTracks();
     if (shuffleMode && shuffleQueue.length) {
       const ci = shuffleQueue.indexOf(currentTrackId);
       const pi = (ci - 1 + shuffleQueue.length) % shuffleQueue.length;
       const prev = tracks.find((t) => t.id === shuffleQueue[pi]);
-      if (prev) playTrack(prev);
+      if (prev) playTrack(prev, { syncView: true });
     } else {
       const idx = getCurrentIndex();
-      if (idx > 0) playTrack(tracks[idx - 1]);
+      if (idx > 0) playTrack(tracks[idx - 1], { syncView: true });
     }
   }
 
   function skipNext() {
-    const next = nextTrack(true); // forceNext=true → 1曲リピートでも次へ
-    if (next) playTrack(next);
+    const next = nextTrack(true);
+    if (next) playTrack(next, { syncView: true }); // user pressed ⏭ → sync view
   }
 
   function handleTrackEnded() {
@@ -542,19 +542,15 @@
       return;
     }
 
-    // If the tab is currently hidden (user has switched away), don't call
-    // play() yet — the browser would reject it. Instead, queue the next
-    // track and let the visibilitychange handler start it when the user
-    // comes back. We still update the "now playing" display so it's ready.
     if (document.hidden) {
       pendingNextTrack = next;
-      // Update track info in state so the UI shows the right track when
-      // the user returns, but don't actually start playback yet.
       currentTrackId = next.id;
       renderAll();
       updateMediaSession(next);
     } else {
-      playTrack(next);
+      // Auto-advance: don't force the view to follow — the user may be
+      // deliberately browsing another playlist. Only update playingPlaylistId.
+      playTrack(next, { syncView: false });
     }
   }
 
