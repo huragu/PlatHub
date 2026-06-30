@@ -202,6 +202,41 @@ const Settings = (() => {
       <p>Worker のコードと設定手順は <code>README.md</code> に記載しています。</p>
     ` }));
 
+    ytSection.appendChild(el("div", { class: "setting-guide", html: `
+      <p><strong>広告について</strong> — PlatHubはYouTube公式のIFrame Player APIで再生しているため、
+      広告を消す機能はアプリ側には実装できません（YouTube側の仕様上の制約です）。</p>
+
+      <p>広告が出るかどうかには、独立した3つの要因が関わります。</p>
+
+      <p><strong>① 動画自体に広告が入っているか</strong><br>
+      埋め込み動画は youtube.com 本体と同じ広告設定を引き継ぎます。チャンネル側が
+      その動画で広告を有効にしていなければ、そもそも誰が見ても広告は出ません。</p>
+
+      <p><strong>② YouTube Premiumアカウントでログインしているか</strong><br>
+      Premiumはサーバー側で広告を取り除く仕組みのため、ブラウザの設定とは別の話です。
+      YouTube公式ヘルプ
+      （<a href="https://support.google.com/youtube/answer/7437519" target="_blank" rel="noopener">support.google.com/youtube/answer/7437519</a>）
+      では、埋め込み動画で広告が出る場合の対処として「YouTubeのCookieをブロックしていないか確認する」ことが
+      案内されています。Premiumアカウントでログイン＋Cookie許可の状態であれば、埋め込みでも
+      広告なしになることをYouTube自身が想定しているとみてよさそうです。</p>
+
+      <p style="color:#999;">ただし保証ではありません。YouTube公式コミュニティには「Premium契約中なのに
+      埋め込み動画で広告が出る」という報告も複数あり、解消しないケースが実際に存在します。</p>
+
+      <p><strong>③ 広告ブロッカー拡張機能（uBlock Originなど）</strong><br>
+      Premiumとは別の、無料の代替手段です。ただしPlatHubの埋め込みプレーヤーで実際に効くかは
+      未検証で、YouTube側もブロッカー検出を年々強化しており、検出されると警告や再生停止に
+      つながることがあります。安定した方法ではないため積極的にはおすすめしていません。</p>
+
+      <p>Premiumの効果を確認する項目：</p>
+      <ul>
+        <li>別タブで youtube.com を開き、右上のアカウントがPremium契約のものになっているか</li>
+        <li>ブラウザの「サードパーティCookieをブロックする」設定がオフになっているか
+        （Chrome: 設定 → プライバシーとセキュリティ → Cookie）</li>
+        <li>シークレット/プライベートウィンドウでは反映されにくいため、通常ウィンドウで利用する</li>
+      </ul>
+    ` }));
+
     container.appendChild(ytSection);
 
     /* ─ 4. 使い方 ─ */

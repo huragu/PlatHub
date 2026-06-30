@@ -25,16 +25,22 @@ const SpotifyEngine = (() => {
   let onErrorCb = null;
   let onNotPremiumCb = null;
 
-  function isSdkLoaded() {
-    return !!(window.Spotify && window.Spotify.Player);
+  // ── SDK ready Promise ────────────────────────────────────
+  // window.onSpotifyWebPlaybackSDKReady MUST be defined before the SDK
+  // script executes, or the SDK throws "onSpotifyWebPlaybackSDKReady is
+  // not defined". We set it up immediately at module evaluation time so
+  // it's available no matter when the SDK finishes loading.
+  let _sdkReadyResolve;
+  const _sdkReady = new Promise((resolve) => { _sdkReadyResolve = resolve; });
+  // If the SDK already fired before this module was evaluated (extremely
+  // unlikely but possible with async loading), resolve immediately.
+  if (window.Spotify && window.Spotify.Player) {
+    _sdkReadyResolve();
+  } else {
+    window.onSpotifyWebPlaybackSDKReady = () => _sdkReadyResolve();
   }
 
-  function waitForSdk() {
-    return new Promise((resolve) => {
-      if (isSdkLoaded()) { resolve(); return; }
-      window.onSpotifyWebPlaybackSDKReady = resolve;
-    });
-  }
+  function waitForSdk() { return _sdkReady; }
 
   /**
    * Initialize the SDK player. Call once after Spotify login.
@@ -91,11 +97,14 @@ const SpotifyEngine = (() => {
   }
 
   /**
-   * Play a Spotify track by its ID.
-   * @param {string} trackId - Spotify track ID (not full URI)
+   * Play a Spotify track or podcast episode by its ID.
+   * @param {string} id - Spotify track or episode ID (not full URI)
+   * @param {number} volume
+   * @param {boolean} autoplay
+   * @param {"track"|"episode"} [type="track"]
    */
-  async function load(trackId, volume, autoplay) {
-    const uri = `spotify:track:${trackId}`;
+  async function load(id, volume, autoplay, type = "track") {
+    const uri = `spotify:${type}:${id}`;
     endFired = false;
     prevPlaying = false;
     currentTrackUri = uri;

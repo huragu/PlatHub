@@ -17,22 +17,22 @@ const SpotifyResolver = (() => {
 
   /**
    * Parse a Spotify URL into { type, id }.
-   * Supports open.spotify.com/{track|playlist|album}/{id} and
-   * spotify:{track|playlist|album}:{id} URI form.
+   * Supports open.spotify.com/{track|playlist|album|show}/{id} and
+   * spotify:{track|playlist|album|show}:{id} URI form.
    */
   function parseUrl(url) {
-    const httpMatch = url.match(/open\.spotify\.com\/(track|playlist|album)\/([A-Za-z0-9]+)/);
+    const httpMatch = url.match(/open\.spotify\.com\/(track|playlist|album|show)\/([A-Za-z0-9]+)/);
     if (httpMatch) return { type: httpMatch[1], id: httpMatch[2] };
 
-    const uriMatch = url.match(/spotify:(track|playlist|album):([A-Za-z0-9]+)/);
+    const uriMatch = url.match(/spotify:(track|playlist|album|show):([A-Za-z0-9]+)/);
     if (uriMatch) return { type: uriMatch[1], id: uriMatch[2] };
 
     return null;
   }
 
   function isSpotifyUrl(url) {
-    return /open\.spotify\.com\/(track|playlist|album)\//.test(url) ||
-           /spotify:(track|playlist|album):/.test(url);
+    return /open\.spotify\.com\/(track|playlist|album|show|episode)\//.test(url) ||
+           /spotify:(track|playlist|album|show|episode):/.test(url);
   }
 
   async function apiFetch(path) {
@@ -64,12 +64,36 @@ const SpotifyResolver = (() => {
     };
   }
 
+  /**
+   * Convert a Spotify podcast episode object into our internal shape.
+   * Note: episodes use a different Web API object than tracks, and a
+   * different URI scheme (spotify:episode:... vs spotify:track:...).
+   */
+  function episodeToItem(episode, showName) {
+    if (!episode || !episode.id) return null;
+    return {
+      episodeId: episode.id,
+      title: episode.name || "Untitled Episode",
+      artist: showName || episode.show?.name || "Podcast",
+      artwork: episode.images?.[0]?.url || episode.show?.images?.[0]?.url || null,
+      durationSec: episode.duration_ms ? episode.duration_ms / 1000 : null,
+    };
+  }
+
   /** Resolve a single track URL/URI. */
   async function resolveTrack(id) {
     const track = await apiFetch(`/tracks/${id}`);
     const episode = trackToEpisode(track);
     if (!episode) throw new ResolveError("トラック情報の取得に失敗しました");
     return episode;
+  }
+
+  /** Resolve a single podcast episode URL/URI. */
+  async function resolveEpisode(id) {
+    const ep = await apiFetch(`/episodes/${id}`);
+    const item = episodeToItem(ep);
+    if (!item) throw new ResolveError("エピソード情報の取得に失敗しました");
+    return item;
   }
 
   /**
@@ -136,5 +160,41 @@ const SpotifyResolver = (() => {
     return { collectionName: albumName, tracks, totalCount: tracks.length };
   }
 
-  return { parseUrl, isSpotifyUrl, resolveTrack, resolvePlaylist, resolveAlbum, ResolveError };
+  /**
+   * Resolve ALL episodes of a podcast show (handles pagination — Spotify
+   * caps each page at 50 items).
+   * @param {string} id - show ID
+   * @param {{limit?: number}} [opts]
+   */
+  async function resolveShow(id, opts = {}) {
+    const meta = await apiFetch(`/shows/${id}?fields=name,publisher`);
+    const showName = meta.name || "Spotify Podcast";
+
+    const episodes = [];
+    let nextPath = `/shows/${id}/episodes?limit=50`;
+
+    while (nextPath) {
+      const page = await apiFetch(nextPath);
+      for (const ep of page.items || []) {
+        const item = episodeToItem(ep, showName);
+        if (item) episodes.push(item);
+        if (opts.limit && episodes.length >= opts.limit) break;
+      }
+      if (opts.limit && episodes.length >= opts.limit) break;
+      nextPath = page.next ? page.next.replace("https://api.spotify.com/v1", "") : null;
+    }
+
+    if (episodes.length === 0) {
+      throw new ResolveError("この番組に再生可能なエピソードが見つかりませんでした");
+    }
+
+    return { collectionName: showName, episodes, totalCount: episodes.length };
+  }
+
+  return {
+    parseUrl, isSpotifyUrl,
+    resolveTrack, resolveEpisode,
+    resolvePlaylist, resolveAlbum, resolveShow,
+    ResolveError,
+  };
 })();

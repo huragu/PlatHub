@@ -7,7 +7,8 @@ const Services = (() => {
     youtube:            { label: "YouTube",  cssClass: "badge-youtube" },
     youtube_playlist:   { label: "YouTube",  cssClass: "badge-youtube" }, // playlist-only URL → bulk import
     spotify_track:      { label: "Spotify",  cssClass: "badge-spotify" },
-    spotify_collection: { label: "Spotify",  cssClass: "badge-spotify" },
+    spotify_episode:    { label: "Spotify",  cssClass: "badge-spotify" }, // single podcast episode
+    spotify_collection: { label: "Spotify",  cssClass: "badge-spotify" }, // playlist/album/show → bulk import
     direct_audio:       { label: "Podcast",  cssClass: "badge-rss" },
     podcast_feed:       { label: "Podcast",  cssClass: "badge-rss" },
     apple_podcast:      { label: "Podcast",  cssClass: "badge-rss" },
@@ -45,7 +46,8 @@ const Services = (() => {
       return "youtube";
     }
     if (/open\.spotify\.com\/track\/|spotify:track:/.test(url)) return "spotify_track";
-    if (/open\.spotify\.com\/(playlist|album)\/|spotify:(playlist|album):/.test(url)) return "spotify_collection";
+    if (/open\.spotify\.com\/episode\/|spotify:episode:/.test(url)) return "spotify_episode";
+    if (/open\.spotify\.com\/(playlist|album|show)\/|spotify:(playlist|album|show):/.test(url)) return "spotify_collection";
     if (/podcasts\.apple\.com\/.+\/podcast\//.test(url)) return "apple_podcast";
     if (isDirectAudioUrl(url)) return "direct_audio";
     return "podcast_feed";
@@ -91,10 +93,18 @@ const Services = (() => {
 
   /**
    * Extract a Spotify track ID from a track URL/URI.
-   * For playlist/album URLs, use SpotifyResolver.parseUrl instead.
+   * For playlist/album/show URLs, use SpotifyResolver.parseUrl instead.
    */
   function extractSpotifyTrackId(url) {
     const m = url.match(/open\.spotify\.com\/track\/([A-Za-z0-9]+)|spotify:track:([A-Za-z0-9]+)/);
+    return m ? (m[1] || m[2]) : null;
+  }
+
+  /**
+   * Extract a Spotify episode ID from a podcast episode URL/URI.
+   */
+  function extractSpotifyEpisodeId(url) {
+    const m = url.match(/open\.spotify\.com\/episode\/([A-Za-z0-9]+)|spotify:episode:([A-Za-z0-9]+)/);
     return m ? (m[1] || m[2]) : null;
   }
 
@@ -120,7 +130,7 @@ const Services = (() => {
 
   return {
     detect, isDirectAudioUrl, extractYouTubeId, extractYouTubePlaylistId,
-    extractApplePodcastIds, extractSpotifyTrackId,
+    extractApplePodcastIds, extractSpotifyTrackId, extractSpotifyEpisodeId,
     badgeHTML, badgeEl, formatTime, META,
   };
 })();

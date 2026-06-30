@@ -182,7 +182,7 @@
     if (!t) return null;
     if (t.service === "youtube") return "youtube";
     if (t.service === "direct_audio") return "audio";
-    if (t.service === "spotify_track") return "spotify";
+    if (t.service === "spotify_track" || t.service === "spotify_episode") return "spotify";
     return null;
   }
 
@@ -218,14 +218,15 @@
       YouTubeEngine.destroy();
       if (SpotifyEngine.isReady) SpotifyEngine.pause();
       AudioEngine.load(t.sourceId, volAudio, playing);
-    } else if (t.service === "spotify_track") {
+    } else if (t.service === "spotify_track" || t.service === "spotify_episode") {
       YouTubeEngine.destroy();
       AudioEngine.pause();
       if (!SpotifyAuth.isLoggedIn()) {
         showToast("Spotifyにログインしていません。ヘッダーの「Spotifyでログイン」から認証してください");
         return;
       }
-      SpotifyEngine.load(t.sourceId, volSpotify, playing);
+      const spotifyType = t.service === "spotify_episode" ? "episode" : "track";
+      SpotifyEngine.load(t.sourceId, volSpotify, playing, spotifyType);
     }
   }
 
@@ -720,6 +721,29 @@
       return;
     }
 
+    if (service === "spotify_episode") {
+      if (!SpotifyAuth.isLoggedIn()) { showAddError("先にヘッダーの「Spotifyでログイン」から認証してください"); return; }
+      const id = Services.extractSpotifyEpisodeId(url);
+      if (!id) { showAddError("Spotifyのエピソード URLを確認してください"); return; }
+
+      setAddTrackLoading(true, "Spotifyからエピソード情報を取得中…");
+      try {
+        const ep = await SpotifyResolver.resolveEpisode(id);
+        commitNewTrack({
+          service: "spotify_episode",
+          sourceId: ep.episodeId,
+          url,
+          title: addTitleInput.value.trim() || ep.title,
+          artist: ep.artist || "",
+        });
+      } catch (e) {
+        showAddError(e.message || "Spotifyエピソードの取得に失敗しました");
+      } finally {
+        setAddTrackLoading(false);
+      }
+      return;
+    }
+
     if (service === "spotify_collection") {
       if (!SpotifyAuth.isLoggedIn()) { showAddError("先にヘッダーの「Spotifyでログイン」から認証してください"); return; }
       const parsed = SpotifyResolver.parseUrl(url);
@@ -727,6 +751,25 @@
 
       setAddTrackLoading(true, "Spotifyからリストを取得中…");
       try {
+        if (parsed.type === "show") {
+          // Podcast show — bulk-import all episodes
+          const result = await SpotifyResolver.resolveShow(parsed.id);
+          setAddTrackLoading(false);
+          openBulkImportPreview({
+            collectionName: result.collectionName,
+            serviceLabel: "Spotify",
+            sourceUrl: url,
+            items: result.episodes.map((ep) => ({
+              service: "spotify_episode",
+              sourceId: ep.episodeId,
+              url: `https://open.spotify.com/episode/${ep.episodeId}`,
+              title: ep.title,
+              artist: ep.artist,
+            })),
+          });
+          return;
+        }
+
         const result = parsed.type === "playlist"
           ? await SpotifyResolver.resolvePlaylist(parsed.id)
           : await SpotifyResolver.resolveAlbum(parsed.id);
