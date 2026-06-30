@@ -1329,3 +1329,57 @@ input::placeholder { color: var(--text-ghost); }
   box-shadow: 0 0 0 2px rgba(233,69,96,.15);
 }
 .setting-text-input::placeholder { color: #444; }
+
+/* ── Import sources panel ── */
+.import-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #12121c;
+}
+.import-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.import-source-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.import-source-name {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.import-source-meta {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 1px;
+}
+.import-source-badge {
+  font-size: 10px;
+  color: var(--red);
+  background: var(--red-dim);
+  border-radius: 10px;
+  padding: 2px 8px;
+  font-weight: 600;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.import-source-check-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 639px) {
+  .import-sources { padding: 8px 16px; }
+  .import-source-row { flex-wrap: wrap; }
+}

@@ -74,6 +74,7 @@
   const addUrlInput = $("#addUrlInput");
   const addTrackBtn = $("#addTrackBtn");
   const addErrorEl = $("#addError");
+  const importSourcesPanel = $("#importSourcesPanel");
   const trackListEl = $("#trackList");
 
   const miniBar = $("#miniBar");
@@ -305,6 +306,198 @@
       throw new Error("プレイリストに動画が見つかりませんでした（非公開の可能性があります）");
     }
     return data;
+  }
+
+  /* ════════════════════════════════════════════
+     Import-source update checking
+     ─────────────────────────────────────────
+     Re-fetches the current full item list for a tracked import source
+     (YouTube playlist / Spotify playlist, album, or show) and returns
+     it in the same { collectionName, items: [{sourceId, title, artist,
+     service, url}] } shape used by the bulk-import preview, so new
+     items can be diffed against source.knownSourceIds.
+  ════════════════════════════════════════════ */
+
+  async function fetchCurrentSourceItems(source) {
+    switch (source.sourceType) {
+      case "youtube_playlist": {
+        const workerUrl = appSettings.yt_worker_url || "";
+        if (!workerUrl) {
+          throw new Error("YouTube Worker URLが未設定です（設定画面で確認してください）");
+        }
+        const playlistId = source.sourceMeta?.playlistId || Services.extractYouTubePlaylistId(source.sourceUrl);
+        const result = await fetchYouTubePlaylist(playlistId, workerUrl);
+        return {
+          collectionName: result.playlistTitle,
+          items: result.videos.map((v) => ({
+            service: "youtube",
+            sourceId: v.id,
+            url: `https://www.youtube.com/watch?v=${v.id}`,
+            title: v.title,
+            artist: v.channelTitle || "",
+          })),
+        };
+      }
+      case "spotify_playlist": {
+        if (!SpotifyAuth.isLoggedIn()) throw new Error("Spotifyにログインしていません");
+        const id = source.sourceMeta?.spotifyId || SpotifyResolver.parseUrl(source.sourceUrl)?.id;
+        const result = await SpotifyResolver.resolvePlaylist(id);
+        return {
+          collectionName: result.collectionName,
+          items: result.tracks.map((t) => ({
+            service: "spotify_track",
+            sourceId: t.trackId,
+            url: `https://open.spotify.com/track/${t.trackId}`,
+            title: t.title,
+            artist: t.artist,
+          })),
+        };
+      }
+      case "spotify_album": {
+        if (!SpotifyAuth.isLoggedIn()) throw new Error("Spotifyにログインしていません");
+        const id = source.sourceMeta?.spotifyId || SpotifyResolver.parseUrl(source.sourceUrl)?.id;
+        const result = await SpotifyResolver.resolveAlbum(id);
+        return {
+          collectionName: result.collectionName,
+          items: result.tracks.map((t) => ({
+            service: "spotify_track",
+            sourceId: t.trackId,
+            url: `https://open.spotify.com/track/${t.trackId}`,
+            title: t.title,
+            artist: t.artist,
+          })),
+        };
+      }
+      case "spotify_show": {
+        if (!SpotifyAuth.isLoggedIn()) throw new Error("Spotifyにログインしていません");
+        const id = source.sourceMeta?.spotifyId || SpotifyResolver.parseUrl(source.sourceUrl)?.id;
+        const result = await SpotifyResolver.resolveShow(id);
+        return {
+          collectionName: result.collectionName,
+          items: result.episodes.map((ep) => ({
+            service: "spotify_episode",
+            sourceId: ep.episodeId,
+            url: `https://open.spotify.com/episode/${ep.episodeId}`,
+            title: ep.title,
+            artist: ep.artist,
+          })),
+        };
+      }
+      default:
+        throw new Error(`未対応のソース種別です（${source.sourceType}）`);
+    }
+  }
+
+  /**
+   * Check ONE import source for new items.
+   * Returns { hasNew: boolean, newItems: [...] } — does not mutate state.
+   */
+  async function checkImportSourceForUpdates(source) {
+    const current = await fetchCurrentSourceItems(source);
+    const known = new Set((source.knownSourceIds || []).map(String));
+    const newItems = current.items.filter((it) => !known.has(String(it.sourceId)));
+    return { hasNew: newItems.length > 0, newItems, collectionName: current.collectionName };
+  }
+
+  /**
+   * Check ALL import sources across ALL playlists for updates.
+   * Used both for the automatic startup/login check and could be reused
+   * for a future "check all" button. Errors on individual sources are
+   * swallowed (logged) so one broken source doesn't block the others.
+   * Returns an array of { playlist, source, newItems, collectionName }
+   * for every source that has new items.
+   */
+  async function checkAllImportSourcesForUpdates() {
+    const results = [];
+    for (const pl of state.playlists) {
+      for (const source of pl.importSources || []) {
+        try {
+          const { hasNew, newItems, collectionName } = await checkImportSourceForUpdates(source);
+          if (hasNew) {
+            results.push({ playlist: pl, source, newItems, collectionName });
+          }
+        } catch (e) {
+          console.warn(`Update check failed for "${source.collectionName}":`, e.message);
+        }
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Manual "🔄 更新を確認" button handler for a single import source.
+   * Fetches the source, and if new items are found, opens the bulk-import
+   * preview modal (pre-filtered to only the new items) so the user can
+   * pick which ones to add. If nothing new, shows a toast and does nothing else.
+   */
+  async function checkSingleSourceManually(playlist, source) {
+    showToast(`「${source.collectionName}」を確認中…`);
+    try {
+      const { hasNew, newItems, collectionName } = await checkImportSourceForUpdates(source);
+      if (!hasNew) {
+        showToast(`「${source.collectionName}」に新しいトラックはありませんでした`);
+        return;
+      }
+      openBulkImportPreview({
+        collectionName: collectionName || source.collectionName,
+        serviceLabel: source.serviceLabel || "更新",
+        sourceUrl: source.sourceUrl,
+        sourceType: source.sourceType,
+        sourceMeta: source.sourceMeta,
+        items: newItems,
+        targetPlaylistId: playlist.id,
+        isUpdateCheck: true,
+      });
+    } catch (e) {
+      showToast(`⚠ 確認に失敗しました: ${e.message || "不明なエラー"}`, { duration: 5000 });
+    }
+  }
+
+  /**
+   * Automatic startup/login check across all tracked sources.
+   * Runs silently in the background; if anything new is found, shows a
+   * single toast summarizing the results rather than interrupting the
+   * user with a modal immediately. Clicking the toast-triggered banner
+   * (via the playlist's own "🔄" button, which will now show a badge)
+   * lets the user review and add at their own pace.
+   *
+   * We deliberately do NOT auto-open the bulk-import modal here — with
+   * multiple sources each needing their own confirmation, stacking modals
+   * on startup would be intrusive. Instead we surface a single summary
+   * and let renderPlaylists() show a "●N" badge next to each updated
+   * source so the user can drill in via the manual button.
+   */
+  let pendingSourceUpdates = []; // [{ playlistId, sourceUrl, newItems, collectionName }]
+
+  async function runAutoUpdateCheck() {
+    if (!state.playlists.some((p) => (p.importSources || []).length > 0)) return; // nothing tracked
+    try {
+      const results = await checkAllImportSourcesForUpdates();
+      pendingSourceUpdates = results.map((r) => ({
+        playlistId: r.playlist.id,
+        sourceUrl: r.source.sourceUrl,
+        newItems: r.newItems,
+        collectionName: r.collectionName,
+      }));
+      if (results.length === 0) return;
+
+      const totalNew = results.reduce((sum, r) => sum + r.newItems.length, 0);
+      const sourceWord = results.length === 1
+        ? `「${results[0].collectionName}」`
+        : `${results.length}件のソース`;
+      showToast(`📡 ${sourceWord}に新しいトラックが ${totalNew} 件見つかりました（プレイリスト画面の🔄から追加）`, { duration: 6000 });
+
+      renderPlaylists();          // refresh sidebar (in case future use needs it there)
+      renderImportSourcesPanel(); // refresh the badge in the import-sources panel
+    } catch (e) {
+      console.warn("Auto update check failed:", e);
+    }
+  }
+
+  /** How many new items are pending for a given source, if any. */
+  function pendingUpdateCountFor(sourceUrl) {
+    const entry = pendingSourceUpdates.find((u) => u.sourceUrl === sourceUrl);
+    return entry ? entry.newItems.length : 0;
   }
 
   /* ════════════════════════════════════════════
@@ -649,6 +842,8 @@
           collectionName: result.playlistTitle,
           serviceLabel: "YouTube",
           sourceUrl: url,
+          sourceType: "youtube_playlist",
+          sourceMeta: { playlistId },
           items: result.videos.map((v) => ({
             service: "youtube",
             sourceId: v.id,
@@ -759,6 +954,8 @@
             collectionName: result.collectionName,
             serviceLabel: "Spotify",
             sourceUrl: url,
+            sourceType: "spotify_show",
+            sourceMeta: { spotifyId: parsed.id },
             items: result.episodes.map((ep) => ({
               service: "spotify_episode",
               sourceId: ep.episodeId,
@@ -778,6 +975,8 @@
           collectionName: result.collectionName,
           serviceLabel: "Spotify",
           sourceUrl: url,
+          sourceType: parsed.type === "playlist" ? "spotify_playlist" : "spotify_album",
+          sourceMeta: { spotifyId: parsed.id },
           items: result.tracks.map((t) => ({
             service: "spotify_track",
             sourceId: t.trackId,
@@ -916,11 +1115,11 @@
      URL can expand into many tracks at once.
   ════════════════════════════════════════════ */
 
-  let bulkImportState = null; // { collectionName, serviceLabel, sourceUrl, items, selected: Set<number> }
+  let bulkImportState = null; // { collectionName, serviceLabel, sourceUrl, sourceType, sourceMeta, items, selected: Set<number> }
 
-  function openBulkImportPreview({ collectionName, serviceLabel, sourceUrl, items }) {
+  function openBulkImportPreview({ collectionName, serviceLabel, sourceUrl, sourceType, sourceMeta, items, targetPlaylistId, isUpdateCheck = false }) {
     bulkImportState = {
-      collectionName, serviceLabel, sourceUrl, items,
+      collectionName, serviceLabel, sourceUrl, sourceType, sourceMeta, items, targetPlaylistId, isUpdateCheck,
       selected: new Set(items.map((_, i) => i)), // all selected by default
     };
     renderBulkImportModal();
@@ -942,10 +1141,12 @@
 
   function renderBulkImportModal() {
     if (!bulkImportState) return;
-    const { collectionName, serviceLabel, items, selected } = bulkImportState;
+    const { collectionName, serviceLabel, items, selected, isUpdateCheck } = bulkImportState;
 
     bulkImportTitleEl.textContent = collectionName;
-    bulkImportSubtitleEl.textContent = `${serviceLabel} ・ ${items.length} 件のトラックが見つかりました`;
+    bulkImportSubtitleEl.textContent = isUpdateCheck
+      ? `${serviceLabel} ・ 新しいトラックが ${items.length} 件あります`
+      : `${serviceLabel} ・ ${items.length} 件のトラックが見つかりました`;
     bulkImportSelectAllCheckbox.checked = selected.size === items.length;
     bulkImportCountEl.textContent = `${selected.size} / ${items.length} 件を追加`;
     bulkImportAddBtn.disabled = selected.size === 0;
@@ -1000,25 +1201,72 @@
 
   function commitBulkImport() {
     if (!bulkImportState) return;
-    const { items, selected } = bulkImportState;
-    const pl = getActivePlaylist();
+    const { items, selected, sourceUrl, sourceType, sourceMeta, collectionName, serviceLabel, targetPlaylistId, isUpdateCheck } = bulkImportState;
+    const pl = targetPlaylistId
+      ? state.playlists.find((p) => p.id === targetPlaylistId) || getActivePlaylist()
+      : getActivePlaylist();
     const toAdd = items.filter((_, i) => selected.has(i));
 
+    const newTrackIds = [];
     toAdd.forEach((item) => {
+      const trackId = `t${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       pl.tracks.push({
-        id: `t${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        id: trackId,
         title: item.title,
         artist: item.artist || "",
         service: item.service,
         sourceId: item.sourceId,
         url: item.url,
       });
+      newTrackIds.push(trackId);
     });
+
+    // Record (or update) the import source so we can check for new items later.
+    // Only trackable sources (YouTube playlist, Spotify playlist/album/show)
+    // get a sourceType; ad-hoc podcast feeds etc. are not tracked for now.
+    if (sourceUrl && sourceType) {
+      registerImportSource(pl, {
+        sourceUrl, sourceType, sourceMeta, collectionName, serviceLabel,
+        importedTrackIds: newTrackIds,
+        // Remember every sourceId we've ever pulled in from this source —
+        // including ones the user deselected this time — so a future
+        // "check for updates" doesn't re-offer items the user already saw.
+        knownSourceIds: items.map((it) => String(it.sourceId)),
+      });
+    }
+
     persist();
     closeBulkImportModal();
     removeLinkFallbackBtn();
     renderAll();
-    showToast(`${toAdd.length} 件のトラックを追加しました`);
+    showToast(
+      isUpdateCheck
+        ? `「${pl.name}」に新しいトラックを ${toAdd.length} 件追加しました`
+        : `${toAdd.length} 件のトラックを追加しました`
+    );
+  }
+
+  /**
+   * Add or merge an import-source record on a playlist.
+   * If a record for this sourceUrl already exists (e.g. user re-pasted the
+   * same playlist URL), merge the track-id lists rather than duplicating.
+   */
+  function registerImportSource(playlist, { sourceUrl, sourceType, sourceMeta, collectionName, serviceLabel, importedTrackIds, knownSourceIds }) {
+    if (!playlist.importSources) playlist.importSources = [];
+    const existing = playlist.importSources.find((s) => s.sourceUrl === sourceUrl);
+    if (existing) {
+      existing.collectionName = collectionName;
+      existing.trackIds = [...new Set([...(existing.trackIds || []), ...importedTrackIds])];
+      existing.knownSourceIds = [...new Set([...(existing.knownSourceIds || []), ...knownSourceIds])];
+      existing.lastCheckedAt = Date.now();
+    } else {
+      playlist.importSources.push({
+        sourceUrl, sourceType, sourceMeta, collectionName, serviceLabel,
+        trackIds: importedTrackIds,
+        knownSourceIds,
+        lastCheckedAt: Date.now(),
+      });
+    }
   }
 
   /**
@@ -1336,6 +1584,63 @@
     const pl = getViewPlaylist();
     activePlNameEl.textContent = pl?.name || "";
     activePlCountEl.textContent = `${getViewTracks().length} トラック`;
+    renderImportSourcesPanel();
+  }
+
+  /**
+   * Shows the list of tracked import sources (YouTube playlist / Spotify
+   * playlist, album, show) for the currently VIEWED playlist, each with
+   * a "🔄 更新を確認" button. If a source has pending updates from the
+   * automatic startup check, shows a "●N" badge instead of requiring
+   * another fetch.
+   */
+  function renderImportSourcesPanel() {
+    if (!importSourcesPanel) return;
+    const pl = getViewPlaylist();
+    const sources = pl?.importSources || [];
+
+    if (sources.length === 0) {
+      importSourcesPanel.hidden = true;
+      importSourcesPanel.innerHTML = "";
+      return;
+    }
+
+    importSourcesPanel.hidden = false;
+    importSourcesPanel.innerHTML = "";
+
+    sources.forEach((source) => {
+      const row = document.createElement("div");
+      row.className = "import-source-row";
+
+      const info = document.createElement("div");
+      info.className = "import-source-info";
+      const nameEl = document.createElement("span");
+      nameEl.className = "import-source-name";
+      nameEl.textContent = source.collectionName;
+      const metaEl = document.createElement("span");
+      metaEl.className = "import-source-meta";
+      metaEl.textContent = `${source.serviceLabel} ・ ${source.trackIds?.length || 0} 件取込済み`;
+      info.appendChild(nameEl);
+      info.appendChild(metaEl);
+      row.appendChild(info);
+
+      const pendingCount = pendingUpdateCountFor(source.sourceUrl);
+      if (pendingCount > 0) {
+        const badge = document.createElement("span");
+        badge.className = "import-source-badge";
+        badge.textContent = `●${pendingCount}`;
+        badge.title = `新しいトラックが${pendingCount}件あります`;
+        row.appendChild(badge);
+      }
+
+      const checkBtn = document.createElement("button");
+      checkBtn.className = "btn-outline btn-sm import-source-check-btn";
+      checkBtn.textContent = "🔄 更新を確認";
+      checkBtn.addEventListener("click", () => checkSingleSourceManually(pl, source));
+      row.appendChild(checkBtn);
+
+      importSourcesPanel.appendChild(row);
+    });
   }
 
   function renderTrackList() {
@@ -1887,46 +2192,6 @@
     }
   });
 
-  /* ════════════════════════════════════════════
-     Page Visibility API — resume playback when
-     the user switches back to this tab.
-
-     Problem: browsers pause/throttle media when a
-     tab goes to the background.
-       • YouTube IFrame: pauses automatically (YT policy)
-       • <audio>: usually keeps playing, but play() calls
-         from background can be rejected
-       • Spotify SDK: connection stays alive but the
-         browser may throttle the audio context
-
-     Solution: when the tab becomes visible again AND
-     our app state says we should be playing, re-issue
-     the play command to whichever engine is active.
-  ════════════════════════════════════════════ */
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) return; // tab going away — do nothing
-    if (!playing) return;        // we weren't playing — do nothing
-
-    const engine = activeEngine();
-    if (!engine) return;
-
-    // Small delay so the browser has a chance to fully restore
-    // the tab before we issue the play command.
-    setTimeout(() => {
-      if (!playing) return; // user may have paused while we waited
-      if (engine === "youtube") {
-        YouTubeEngine.play();
-      } else if (engine === "audio") {
-        // <audio> may have been suspended; re-call play() which
-        // returns a Promise — errors are silently ignored since the
-        // audio is likely already playing fine.
-        AudioEngine.play();
-      } else if (engine === "spotify") {
-        SpotifyEngine.play();
-      }
-    }, 300);
-  });
-
   /**
    * Persist just enough state to resume playback after a page navigation
    * (e.g. Spotify OAuth redirect).  Uses sessionStorage so it's cleared
@@ -2002,6 +2267,11 @@
     } else {
       restorePlaybackSession(); // non-Spotify session (shouldn't happen, but safe)
     }
+
+    // Check tracked import sources (YouTube playlists, Spotify
+    // playlists/albums/shows) for new items. Delayed slightly so it
+    // doesn't compete with the initial render and session-restore calls.
+    setTimeout(() => { runAutoUpdateCheck(); }, 2000);
   }
 
   init();
