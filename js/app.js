@@ -2,8 +2,28 @@
    app.js — Main application logic
 ════════════════════════════════════════════════════════ */
 
+/**
+ * Page-scope icon helper — defined outside the IIFE so that
+ * settings.js and other modules loaded before app.js can also call it.
+ */
+function iconMarkup(name, cls = "icon") {
+  return `<svg class="${cls}" aria-hidden="true"><use href="#icon-${name}"></use></svg>`;
+}
+
 (() => {
   "use strict";
+
+  /* Load the shared icon sprite (assets/icons.svg) and inject it inline,
+     so <use href="#icon-xxx"> references throughout the app resolve.
+     SVG <use> elements auto-update once their target symbol appears in
+     the DOM, so this can safely run in parallel with the rest of init. */
+  fetch("assets/icons.svg")
+    .then((res) => res.text())
+    .then((svgText) => {
+      const host = document.getElementById("iconSpriteHost");
+      if (host) host.innerHTML = svgText;
+    })
+    .catch((e) => console.warn("Icon sprite failed to load:", e));
 
   /* ─── State ─── */
   let state = Storage.load();
@@ -39,6 +59,26 @@
   /* ─── DOM refs (static) ─── */
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+  /**
+   * Icon helpers — build/replace inline <svg><use> references.
+   * iconMarkup() is defined page-scope above; setIcon() and escapeHtmlText()
+   * are IIFE-local helpers that build on it.
+   */
+  function setIcon(el, name, label = "", cls = "icon") {
+    if (!el) return;
+    el.innerHTML = iconMarkup(name, cls) + (label ? `<span class="icon-label">${label}</span>` : "");
+  }
+  /**
+   * Escape user-provided text (playlist names, track titles, etc.) before
+   * mixing it into innerHTML alongside icon markup. Plain textContent
+   * assignment is preferred wherever icon+text aren't combined in one node.
+   */
+  function escapeHtmlText(str) {
+    const div = document.createElement("div");
+    div.textContent = str ?? "";
+    return div.innerHTML;
+  }
 
   const trackCountEl = $("#trackCount");
   const onairLamp = $("#onairLamp");
@@ -232,9 +272,9 @@
   }
 
   YouTubeEngine.onEnded(() => handleTrackEnded());
-  YouTubeEngine.onError((msg) => showToast(`⚠ ${msg}`, { duration: 5000 }));
+  YouTubeEngine.onError((msg) => showToast(msg, { duration: 5000, icon: "warning" }));
   AudioEngine.onEnded(() => handleTrackEnded());
-  AudioEngine.onError((msg) => showToast(`⚠ ${msg}`, { duration: 5000 }));
+  AudioEngine.onError((msg) => showToast(msg, { duration: 5000, icon: "warning" }));
   AudioEngine.onTime((cur, dur) => {
     if (activeEngine() === "audio") {
       position = cur; duration = dur || duration;
@@ -246,8 +286,8 @@
   });
 
   SpotifyEngine.onEnded(() => handleTrackEnded());
-  SpotifyEngine.onError((msg) => showToast(`⚠ ${msg}`, { duration: 5000 }));
-  SpotifyEngine.onNotPremium(() => { renderSpotifyAuthUI(); showToast("⚠ Spotify Premiumアカウントが必要です", { duration: 5000 }); });
+  SpotifyEngine.onError((msg) => showToast(msg, { duration: 5000, icon: "warning" }));
+  SpotifyEngine.onNotPremium(() => { renderSpotifyAuthUI(); showToast("Spotify Premiumアカウントが必要です", { duration: 5000, icon: "warning" }); });
 
   AudioEngine.onPlayBlocked(() => {
     // play() was rejected (autoplay policy, likely backgrounded tab).
@@ -449,7 +489,7 @@
         isUpdateCheck: true,
       });
     } catch (e) {
-      showToast(`⚠ 確認に失敗しました: ${e.message || "不明なエラー"}`, { duration: 5000 });
+      showToast(`確認に失敗しました: ${e.message || "不明なエラー"}`, { duration: 5000, icon: "warning" });
     }
   }
 
@@ -485,7 +525,7 @@
       const sourceWord = results.length === 1
         ? `「${results[0].collectionName}」`
         : `${results.length}件のソース`;
-      showToast(`📡 ${sourceWord}に新しいトラックが ${totalNew} 件見つかりました（プレイリスト画面の🔄から追加）`, { duration: 6000 });
+      showToast(`${sourceWord}に新しいトラックが ${totalNew} 件見つかりました（プレイリスト画面の更新ボタンから追加）`, { duration: 6000, icon: "broadcast" });
 
       renderPlaylists();          // refresh sidebar (in case future use needs it there)
       renderImportSourcesPanel(); // refresh the badge in the import-sources panel
@@ -722,7 +762,7 @@
 
   function skipNext() {
     const next = nextTrack(true);
-    if (next) playTrack(next, { syncView: true }); // user pressed ⏭ → sync view
+    if (next) playTrack(next, { syncView: true }); // user pressed skip-next -> sync view
   }
 
   function handleTrackEnded() {
@@ -830,7 +870,7 @@
       const workerUrl = appSettings.yt_worker_url || "";
       if (!workerUrl) {
         showAddError(
-          "YouTubeプレイリストの一括追加にはCloudflare Workerの設定が必要です。設定画面（⚙）の「YOUTUBE」→「プレイリスト取得 Worker URL」を入力してください。"
+          "YouTubeプレイリストの一括追加にはCloudflare Workerの設定が必要です。設定画面の「YOUTUBE」→「プレイリスト取得 Worker URL」を入力してください。"
         );
         return;
       }
@@ -1095,7 +1135,7 @@
     btn.id = "addLinkFallbackBtn";
     btn.className = "btn-outline";
     btn.style.marginTop = "8px";
-    btn.textContent = "🔗 リンクとして追加する";
+    setIcon(btn, "link", "リンクとして追加する");
     btn.addEventListener("click", () => {
       commitNewTrack({
         service: "link",
@@ -1275,9 +1315,13 @@
    * where the inline #addError banner inside the form isn't visible.
    */
   let toastTimer = null;
-  function showToast(message, { duration = 3000 } = {}) {
+  function showToast(message, { duration = 3000, icon = null } = {}) {
     clearTimeout(toastTimer);
-    toastEl.textContent = message;
+    if (icon) {
+      toastEl.innerHTML = iconMarkup(icon, "icon toast-icon") + `<span>${escapeHtmlText(message)}</span>`;
+    } else {
+      toastEl.textContent = message;
+    }
     toastEl.hidden = false;
     requestAnimationFrame(() => toastEl.classList.add("visible"));
     toastTimer = setTimeout(() => {
@@ -1529,8 +1573,11 @@
     info.className = "playlist-info";
     const nameEl = document.createElement("div");
     nameEl.className = "playlist-name";
-    // Show a small ▶ icon next to the playlist that is currently playing
-    nameEl.textContent = (isPlaying ? "▶ " : "") + pl.name;
+    if (isPlaying) {
+      nameEl.innerHTML = iconMarkup("play", "icon icon-playlist-playing") + escapeHtmlText(pl.name);
+    } else {
+      nameEl.textContent = pl.name;
+    }
     const countEl = document.createElement("div");
     countEl.className = "playlist-count";
     countEl.textContent = `${pl.tracks.length} トラック`;
@@ -1541,7 +1588,7 @@
 
     const editBtn = document.createElement("button");
     editBtn.className = "playlist-icon-btn";
-    editBtn.textContent = "✏";
+    setIcon(editBtn, "edit");
     editBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       startRenamePlaylist(item, pl, info);
@@ -1551,7 +1598,7 @@
     if (state.playlists.length > 1) {
       const delBtn = document.createElement("button");
       delBtn.className = "playlist-icon-btn";
-      delBtn.textContent = "🗑";
+      setIcon(delBtn, "trash");
       delBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         deletePlaylist(pl.id);
@@ -1628,14 +1675,14 @@
       if (pendingCount > 0) {
         const badge = document.createElement("span");
         badge.className = "import-source-badge";
-        badge.textContent = `●${pendingCount}`;
+        badge.textContent = `+${pendingCount}`;
         badge.title = `新しいトラックが${pendingCount}件あります`;
         row.appendChild(badge);
       }
 
       const checkBtn = document.createElement("button");
       checkBtn.className = "btn-outline btn-sm import-source-check-btn";
-      checkBtn.textContent = "🔄 更新を確認";
+      setIcon(checkBtn, "refresh", "更新を確認");
       checkBtn.addEventListener("click", () => checkSingleSourceManually(pl, source));
       row.appendChild(checkBtn);
 
@@ -1650,7 +1697,7 @@
     if (tracks.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.innerHTML = `<div class="empty-icon">📻</div><div>「+ 追加」からトラックを追加しよう</div>`;
+      empty.innerHTML = `<div class="empty-icon">${iconMarkup("radio", "icon icon-empty-state")}</div><div>「+ 追加」からトラックを追加しよう</div>`;
       trackListEl.appendChild(empty);
       return;
     }
@@ -1667,7 +1714,11 @@
 
     const num = document.createElement("span");
     num.className = "track-num";
-    num.textContent = active && playing ? "▶" : String(idx + 1);
+    if (active && playing) {
+      num.innerHTML = iconMarkup("play", "icon icon-track-playing");
+    } else {
+      num.textContent = String(idx + 1);
+    }
     item.appendChild(num);
 
     const meta = document.createElement("div");
@@ -1700,7 +1751,7 @@
 
     const removeBtn = document.createElement("button");
     removeBtn.className = "track-remove-btn";
-    removeBtn.textContent = "✕";
+    setIcon(removeBtn, "close");
     removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeTrack(t.id); });
     item.appendChild(removeBtn);
 
@@ -1820,7 +1871,7 @@
     pp.titleEl.textContent = t ? t.title : "トラックを選択して再生";
     pp.artistEl.textContent = t?.artist || "";
 
-    pp.playBtn.textContent = playing ? "⏸" : "▶";
+    setIcon(pp.playBtn, playing ? "pause" : "play");
     pp.volumeSlider.value = volume;
 
     renderTransportInto(pp);
@@ -1864,7 +1915,7 @@
     dbProgressHandle.classList.toggle("visible", pct > 0);
     dbCurrentTime.textContent = Services.formatTime(position);
     dbDuration.textContent = Services.formatTime(duration);
-    dbPlayBtn.textContent = playing ? "⏸" : "▶";
+    setIcon(dbPlayBtn, playing ? "pause" : "play");
 
     const t = getCurrentTrack();
     dbTitle.textContent = t ? t.title : "未選択";
@@ -1883,7 +1934,7 @@
     if (t) {
       miniBarTitle.textContent = t.title;
       miniBarProgressFill.style.width = `${pct}%`;
-      miniBarPlayBtn.textContent = playing ? "⏸" : "▶";
+      setIcon(miniBarPlayBtn, playing ? "pause" : "play");
     }
   }
 
@@ -1894,47 +1945,57 @@
     pp.progressHandle.classList.toggle("visible", pct > 0);
     pp.currentTimeEl.textContent = Services.formatTime(position);
     pp.durationEl.textContent = Services.formatTime(duration);
-    pp.playBtn.textContent = playing ? "⏸" : "▶";
+    setIcon(pp.playBtn, playing ? "pause" : "play");
   }
 
   function renderTrackListActiveMarker() {
-    // Lightweight: just re-render the ▶/number column without full rebuild
+    // Lightweight: just re-render the play-icon/number column without full rebuild
     $$(".track-item").forEach((el, i) => {
       const tracks = getViewTracks();
       const t = tracks[i];
       if (!t) return;
       const numEl = el.querySelector(".track-num");
-      if (numEl) numEl.textContent = t.id === currentTrackId && playing ? "▶" : String(i + 1);
+      if (!numEl) return;
+      if (t.id === currentTrackId && playing) {
+        numEl.innerHTML = iconMarkup("play", "icon icon-track-playing");
+      } else {
+        numEl.textContent = String(i + 1);
+      }
     });
   }
 
   function renderRadioUI() {
-    dbRadioBtn.textContent = `📻 ${radioMode ? "ON" : "OFF"}`;
+    const dbLabel = $("#dbRadioBtnLabel");
+    if (dbLabel) dbLabel.textContent = radioMode ? "ON" : "OFF";
     dbRadioBtn.classList.toggle("active", radioMode);
     [ppDesktop, ppMobile].forEach((pp) => {
       if (!pp) return;
-      pp.radioBtn.textContent = radioMode
-        ? "📻 RADIO ON — 自動連続再生中"
-        : "📻 RADIO — タップで連続再生";
+      const label = pp.radioBtn.querySelector(".pp-radio-label");
+      if (label) {
+        label.textContent = radioMode
+          ? "RADIO ON — 自動連続再生中"
+          : "RADIO — タップで連続再生";
+      }
       pp.radioBtn.classList.toggle("active", radioMode);
     });
   }
 
   function renderPlaybackModeUI() {
-    // Shuffle button
-    const shuffleText = shuffleMode ? "🔀 ON" : "🔀";
+    // Shuffle button — state communicated via the "active" class (accent
+    // color), so the icon itself doesn't need an "ON" text suffix.
     [dbShuffleBtn, ...$$(".pp-shuffle")].forEach((el) => {
       if (!el) return;
-      el.textContent = shuffleText;
+      setIcon(el, "shuffle");
       el.classList.toggle("active", shuffleMode);
     });
 
-    // Repeat button
-    const repeatMap = { none: "🔁", one: "🔂 1", all: "🔁 ALL" };
-    const repeatText = repeatMap[repeatMode] || "🔁";
+    // Repeat button — three states use three distinct icons rather than
+    // appending text, so "repeat one" reads as a single glyph (with a
+    // small "1" baked into the icon) instead of an icon + text label.
+    const repeatIconMap = { none: "repeat", one: "repeat-one", all: "repeat" };
     [dbRepeatBtn, ...$$(".pp-repeat")].forEach((el) => {
       if (!el) return;
-      el.textContent = repeatText;
+      setIcon(el, repeatIconMap[repeatMode] || "repeat");
       el.classList.toggle("active", repeatMode !== "none");
       el.title = repeatMode === "none" ? "繰り返しなし"
                : repeatMode === "one" ? "1曲繰り返し"
@@ -1953,17 +2014,17 @@
     spotifyAuthBtn.disabled = false;
 
     if (!SpotifyAuth.isConfigured()) {
-      spotifyAuthBtn.textContent = "🎵 Spotify設定";
+      setIcon(spotifyAuthBtn, "music-note", "Spotify設定");
       spotifyAuthBtn.classList.remove("connected");
       spotifyAuthBtn.title = "クリックしてSpotify Client IDを設定";
       return;
     }
     if (SpotifyAuth.isLoggedIn()) {
-      spotifyAuthBtn.textContent = "🟢 Spotify連携中";
+      setIcon(spotifyAuthBtn, "dot-filled", "Spotify連携中", "icon icon-connected-dot");
       spotifyAuthBtn.classList.add("connected");
       spotifyAuthBtn.title = "クリックしてログアウト";
     } else {
-      spotifyAuthBtn.textContent = "🎵 Spotifyでログイン";
+      setIcon(spotifyAuthBtn, "music-note", "Spotifyでログイン");
       spotifyAuthBtn.classList.remove("connected");
       spotifyAuthBtn.title = "Spotify Premiumアカウントでログイン";
     }
@@ -2089,8 +2150,12 @@
     const willShow = addForm.hidden;
     addForm.hidden = !willShow;
     toggleAddFormBtn.classList.toggle("active", willShow);
-    toggleAddFormBtn.textContent = willShow ? "✕ 閉じる" : "+ 追加";
-    if (willShow) addUrlInput.focus();
+    if (willShow) {
+      setIcon(toggleAddFormBtn, "close", "閉じる");
+      addUrlInput.focus();
+    } else {
+      toggleAddFormBtn.textContent = "+ 追加";
+    }
   });
   addTrackBtn.addEventListener("click", addTrack);
   addUrlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addTrack(); });
@@ -2101,7 +2166,7 @@
     if (willShow) {
       newPlaylistForm.hidden = false;
       toggleNewPlaylistFormBtn.classList.add("active");
-      toggleNewPlaylistFormBtn.textContent = "✕ 閉じる";
+      setIcon(toggleNewPlaylistFormBtn, "close", "閉じる");
       newPlaylistInput.focus();
     }
   });
@@ -2114,7 +2179,7 @@
     if (willShow) {
       newPlaylistFormDesktop.hidden = false;
       toggleNewPlaylistFormDesktopBtn.classList.add("active");
-      toggleNewPlaylistFormDesktopBtn.textContent = "✕";
+      setIcon(toggleNewPlaylistFormDesktopBtn, "close");
       newPlaylistInputDesktop.focus();
     }
   });

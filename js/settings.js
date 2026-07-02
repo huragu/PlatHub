@@ -156,7 +156,7 @@ const Settings = (() => {
         prefs.radio_autostart = v;
         onPrefsChange(prefs);
       }),
-      "📻 RADIOをオンにしたときに先頭から自動で再生を始める"
+      "RADIOをオンにしたときに先頭から自動で再生を始める"
     ));
 
     radioSection.appendChild(row(
@@ -165,7 +165,7 @@ const Settings = (() => {
         prefs.radio_shuffle_on_start = v;
         onPrefsChange(prefs);
       }),
-      "🔀 自動再生開始時にシャッフルをオンにする（「RADIO ON 時に自動再生開始」が有効のとき機能します）"
+      "自動再生開始時にシャッフルをオンにする（「RADIO ON 時に自動再生開始」が有効のとき機能します）"
     ));
 
     container.appendChild(radioSection);
@@ -251,8 +251,8 @@ const Settings = (() => {
         <li><strong>MP3 直リンク</strong> — <code>.mp3 / .m4a / .ogg</code> など</li>
         <li><strong>Podcastフィード</strong> — <code>*.rss</code> 等、任意のRSS/Atomフィード（全話プレビュー→一括追加）</li>
       </ul>
-      <p><strong>ラジオモード</strong>（📻）をオンにするとプレイリストをループ再生します。</p>
-      <p><strong>シャッフル</strong>（🔀）と<strong>リピート</strong>（🔁）はプレーヤーバー中央のボタンで切り替えられます。</p>
+      <p><strong>ラジオモード</strong>（${iconMarkup("radio", "icon icon-inline")}）をオンにするとプレイリストをループ再生します。</p>
+      <p><strong>シャッフル</strong>（${iconMarkup("shuffle", "icon icon-inline")}）と<strong>リピート</strong>（${iconMarkup("repeat", "icon icon-inline")}）はプレーヤーバー中央のボタンで切り替えられます。</p>
     ` }));
     container.appendChild(guideSection);
 
@@ -280,7 +280,7 @@ const Settings = (() => {
             𝕏 @Huragu_GOD
           </a>
           <a href="https://huragusin.booth.pm/" target="_blank" rel="noopener" class="setting-link">
-            🛍 Booth
+            ${iconMarkup("shop", "icon icon-inline")} Booth
           </a>
         </div>
       </div>

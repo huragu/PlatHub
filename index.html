@@ -11,6 +11,9 @@
 </head>
 <body>
 
+<!-- Icon sprite is fetched and injected here on load (see js/app.js) -->
+<div id="iconSpriteHost" aria-hidden="true"></div>
+
 <div id="app">
 
   <!-- ═══ Header ═══ -->
@@ -23,7 +26,7 @@
     <div class="header-right">
       <button class="btn-outline btn-sm spotify-auth-btn" id="spotifyAuthBtn">Spotifyでログイン</button>
       <span class="track-count" id="trackCount">0 tracks</span>
-      <button class="settings-btn" id="settingsBtn" title="設定">⚙</button>
+      <button class="settings-btn" id="settingsBtn" title="設定"><svg class="icon"><use href="#icon-settings"></use></svg></button>
     </div>
   </header>
 
@@ -110,8 +113,8 @@
         </div>
       </div>
     </div>
-    <button class="minibar-play" id="miniBarPlayBtn">▶</button>
-    <button class="minibar-next" id="miniBarNextBtn">⏭</button>
+    <button class="minibar-play" id="miniBarPlayBtn"><svg class="icon"><use href="#icon-play"></use></svg></button>
+    <button class="minibar-next" id="miniBarNextBtn"><svg class="icon"><use href="#icon-next"></use></svg></button>
   </div>
 
   <!-- ═══ Desktop bottom bar ═══ -->
@@ -122,11 +125,11 @@
     </div>
     <div class="db-controls">
       <div class="db-buttons">
-        <button class="ctrl-btn mode-btn" id="dbShuffleBtn" title="シャッフル">🔀</button>
-        <button class="ctrl-btn" id="dbPrevBtn">⏮</button>
-        <button class="play-btn" id="dbPlayBtn">▶</button>
-        <button class="ctrl-btn" id="dbNextBtn">⏭</button>
-        <button class="ctrl-btn mode-btn" id="dbRepeatBtn" title="繰り返しなし">🔁</button>
+        <button class="ctrl-btn mode-btn" id="dbShuffleBtn" title="シャッフル"><svg class="icon"><use href="#icon-shuffle"></use></svg></button>
+        <button class="ctrl-btn" id="dbPrevBtn"><svg class="icon"><use href="#icon-prev"></use></svg></button>
+        <button class="play-btn" id="dbPlayBtn"><svg class="icon"><use href="#icon-play"></use></svg></button>
+        <button class="ctrl-btn" id="dbNextBtn"><svg class="icon"><use href="#icon-next"></use></svg></button>
+        <button class="ctrl-btn mode-btn" id="dbRepeatBtn" title="繰り返しなし"><svg class="icon"><use href="#icon-repeat"></use></svg></button>
       </div>
       <div class="progress-row">
         <span class="time-label" id="dbCurrentTime">0:00</span>
@@ -142,7 +145,9 @@
         <span class="onair-dot"></span>
         <span class="onair-text">ON AIR</span>
       </div>
-      <button class="radio-btn" id="dbRadioBtn">📻 OFF</button>
+      <button class="radio-btn" id="dbRadioBtn">
+        <svg class="icon"><use href="#icon-radio"></use></svg><span class="radio-btn-label" id="dbRadioBtnLabel">OFF</span>
+      </button>
       <input type="range" id="dbVolumeSlider" class="volume-slider" min="0" max="1" step="0.02" value="0.8">
     </div>
   </div>
@@ -150,16 +155,16 @@
   <!-- ═══ Mobile tab bar ═══ -->
   <nav class="tabbar" id="tabBar">
     <button class="tab-btn" data-tab="playlists">
-      <span class="tab-icon">☰</span><span class="tab-label">リスト</span>
+      <svg class="icon tab-icon"><use href="#icon-list"></use></svg><span class="tab-label">リスト</span>
     </button>
     <button class="tab-btn active" data-tab="tracks">
-      <span class="tab-icon">♫</span><span class="tab-label">トラック</span>
+      <svg class="icon tab-icon"><use href="#icon-track"></use></svg><span class="tab-label">トラック</span>
     </button>
     <button class="tab-btn" data-tab="player">
-      <span class="tab-icon">▶</span><span class="tab-label">プレーヤー</span>
+      <svg class="icon tab-icon"><use href="#icon-play"></use></svg><span class="tab-label">プレーヤー</span>
     </button>
     <button class="tab-btn" data-tab="settings">
-      <span class="tab-icon">⚙</span><span class="tab-label">設定</span>
+      <svg class="icon tab-icon"><use href="#icon-settings"></use></svg><span class="tab-label">設定</span>
     </button>
   </nav>
 
@@ -170,7 +175,7 @@
   <div class="settings-inner">
     <div class="settings-header">
       <span class="settings-title">設定</span>
-      <button class="settings-close-btn" id="settingsCloseBtn">✕</button>
+      <button class="settings-close-btn" id="settingsCloseBtn"><svg class="icon"><use href="#icon-close"></use></svg></button>
     </div>
     <div class="settings-content" id="settingsContentDesktop"></div>
   </div>
@@ -185,7 +190,7 @@
         <div class="modal-title" id="bulkImportTitle">番組名</div>
         <div class="modal-subtitle" id="bulkImportSubtitle">Podcast ・ 0 件</div>
       </div>
-      <button class="modal-close-btn" id="bulkImportCloseBtn">✕</button>
+      <button class="modal-close-btn" id="bulkImportCloseBtn"><svg class="icon"><use href="#icon-close"></use></svg></button>
     </div>
     <label class="bulk-import-select-all">
       <input type="checkbox" id="bulkImportSelectAll" checked>
@@ -224,11 +229,11 @@
   <div class="pp-waveform" hidden></div>
   <div class="pp-controls">
     <div class="pp-buttons">
-      <button class="ctrl-btn mode-btn pp-shuffle" title="シャッフル">🔀</button>
-      <button class="ctrl-btn pp-prev">⏮</button>
-      <button class="play-btn pp-play">▶</button>
-      <button class="ctrl-btn pp-next">⏭</button>
-      <button class="ctrl-btn mode-btn pp-repeat" title="繰り返しなし">🔁</button>
+      <button class="ctrl-btn mode-btn pp-shuffle" title="シャッフル"><svg class="icon"><use href="#icon-shuffle"></use></svg></button>
+      <button class="ctrl-btn pp-prev"><svg class="icon"><use href="#icon-prev"></use></svg></button>
+      <button class="play-btn pp-play"><svg class="icon"><use href="#icon-play"></use></svg></button>
+      <button class="ctrl-btn pp-next"><svg class="icon"><use href="#icon-next"></use></svg></button>
+      <button class="ctrl-btn mode-btn pp-repeat" title="繰り返しなし"><svg class="icon"><use href="#icon-repeat"></use></svg></button>
     </div>
     <div class="progress-row">
       <span class="time-label pp-current">0:00</span>
@@ -239,12 +244,14 @@
       <span class="time-label pp-duration">0:00</span>
     </div>
     <div class="pp-volume-row">
-      <span class="vol-icon">🔈</span>
+      <span class="vol-icon"><svg class="icon"><use href="#icon-volume-low"></use></svg></span>
       <input type="range" class="volume-slider pp-volume" min="0" max="1" step="0.02" value="0.8">
-      <span class="vol-icon">🔊</span>
+      <span class="vol-icon"><svg class="icon"><use href="#icon-volume-high"></use></svg></span>
     </div>
   </div>
-  <button class="radio-btn-large pp-radio">📻 RADIO — タップで連続再生</button>
+  <button class="radio-btn-large pp-radio">
+    <svg class="icon"><use href="#icon-radio"></use></svg><span class="pp-radio-label">RADIO — タップで連続再生</span>
+  </button>
 </template>
 
 <script src="https://www.youtube.com/iframe_api"></script>

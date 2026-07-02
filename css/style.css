@@ -1383,3 +1383,147 @@ input::placeholder { color: var(--text-ghost); }
   .import-sources { padding: 8px 16px; }
   .import-source-row { flex-wrap: wrap; }
 }
+
+/* ════════════════════════════════════════════════════════
+   SVG Icon System
+   All icons reference #icon-* symbols from assets/icons.svg
+   injected into the DOM at startup. The .icon class provides
+   the base sizing; context-specific variants adjust scale and
+   color behavior.
+════════════════════════════════════════════════════════ */
+
+/* ── Base icon ── */
+.icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: middle;
+  flex-shrink: 0;
+  color: inherit;         /* picks up parent color */
+  fill: none;             /* paths use stroke by default */
+  stroke: none;
+}
+
+/* Icon + text label within buttons */
+.icon-label {
+  margin-left: 6px;
+}
+
+/* ── Transport controls (play/pause/prev/next) ──
+   Larger, prominent size for the main play button region */
+.play-btn .icon {
+  width: 1.4em;
+  height: 1.4em;
+}
+.ctrl-btn .icon {
+  width: 1.1em;
+  height: 1.1em;
+}
+
+/* ── Mode buttons (shuffle/repeat) ── */
+.mode-btn .icon {
+  width: 1.1em;
+  height: 1.1em;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.mode-btn.active .icon {
+  opacity: 1;
+}
+
+/* ── Desktop bottom bar ── */
+.db-buttons .icon { color: #aaa; }
+.db-buttons .play-btn .icon { color: var(--text); }
+.db-buttons .mode-btn .icon { color: #888; }
+.db-buttons .mode-btn.active .icon { color: var(--red); }
+
+/* ── Radio button ── */
+.radio-btn { display: inline-flex; align-items: center; gap: 6px; }
+.radio-btn .icon { width: 1em; height: 1em; }
+.radio-btn-large { display: inline-flex; align-items: center; gap: 8px; }
+.radio-btn-large .icon { width: 1.1em; height: 1.1em; }
+.pp-radio-label { white-space: nowrap; }
+
+/* ── Volume icons ── */
+.vol-icon { display: inline-flex; align-items: center; }
+.vol-icon .icon { width: 1.15em; height: 1.15em; color: #666; }
+
+/* ── Settings gear / close buttons ── */
+.settings-btn .icon { width: 1.1em; height: 1.1em; }
+.settings-close-btn .icon { width: 1em; height: 1em; }
+.modal-close-btn .icon { width: 0.9em; height: 0.9em; }
+
+/* ── Tab bar icons ── */
+.tab-btn .icon.tab-icon {
+  width: 1.25em;
+  height: 1.25em;
+  display: block;
+  margin: 0 auto 2px;
+}
+
+/* ── Track list: play indicator & remove button ── */
+.track-num .icon.icon-track-playing {
+  width: 0.85em;
+  height: 0.85em;
+  color: var(--red);
+}
+.track-remove-btn .icon {
+  width: 0.85em;
+  height: 0.85em;
+}
+
+/* ── Playlist item: playing indicator & edit/trash ── */
+.playlist-name .icon.icon-playlist-playing {
+  width: 0.75em;
+  height: 0.75em;
+  color: var(--red);
+  margin-right: 4px;
+  vertical-align: baseline;
+}
+.playlist-icon-btn .icon {
+  width: 1em;
+  height: 1em;
+}
+
+/* ── Spotify auth button ── */
+.spotify-auth-btn .icon { width: 1em; height: 1em; }
+.icon.icon-connected-dot {
+  color: #1DB954;   /* Spotify green for the "connected" dot */
+}
+
+/* ── Link/refresh/warning in action buttons ── */
+.btn-outline .icon,
+.import-source-check-btn .icon {
+  width: 1em;
+  height: 1em;
+}
+
+/* ── Toast icon ── */
+.icon.toast-icon {
+  width: 1em;
+  height: 1em;
+  margin-right: 6px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+/* Toast needs flex for icon + text to align */
+#toast {
+  display: flex;
+  align-items: center;
+}
+#toast[hidden] { display: none; }
+
+/* ── Empty-state large icon ── */
+.empty-icon .icon.icon-empty-state {
+  width: 3em;
+  height: 3em;
+  color: #333;
+  display: block;
+}
+
+/* ── Inline icons within text (settings guide, etc.) ── */
+.icon.icon-inline {
+  width: 1em;
+  height: 1em;
+  vertical-align: text-bottom;
+}
