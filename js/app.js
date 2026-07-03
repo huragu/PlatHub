@@ -134,10 +134,11 @@ function iconMarkup(name, cls = "icon") {
   const dbProgressTrack = $("#dbProgressTrack");
   const dbProgressFill = $("#dbProgressFill");
   const dbProgressHandle = $("#dbProgressHandle");
-  const dbRadioBtn = $("#dbRadioBtn");
   const dbShuffleBtn = $("#dbShuffleBtn");
   const dbRepeatBtn = $("#dbRepeatBtn");
   const dbVolumeSlider = $("#dbVolumeSlider");
+  const headerRadioBtn = $("#headerRadioBtn");
+  const headerRadioBtnLabel = $("#headerRadioBtnLabel");
 
   const tabBtns = $$(".tab-btn");
 
@@ -203,9 +204,19 @@ function iconMarkup(name, cls = "icon") {
   function getCurrentIndex() {
     return getTracks().findIndex((t) => t.id === currentTrackId);
   }
+  let _lastPersistFailed = false;
   function persist() {
     state.activePlaylistId = viewPlaylistId; // backwards compat with stored JSON key
-    Storage.save(state);
+    const ok = Storage.save(state);
+    if (!ok && !_lastPersistFailed) {
+      // Only notify on the *first* failure in a streak, so a persistent
+      // quota-exceeded condition doesn't spam a toast on every action.
+      showToast(
+        "保存容量の上限に達したため変更を保存できませんでした。不要なトラックやプレイリストを削除してください。",
+        { duration: 6000, icon: "warning" }
+      );
+    }
+    _lastPersistFailed = !ok;
   }
   function persistPlayerPrefs() {
     Storage.savePrefs({ volume, shuffle: shuffleMode, repeat: repeatMode });
@@ -348,6 +359,36 @@ function iconMarkup(name, cls = "icon") {
     return data;
   }
 
+  /**
+   * Fetch all uploaded videos for a YouTube channel via the Cloudflare
+   * Worker proxy.
+   * Worker endpoint:  GET {workerUrl}/channel?handle={handle}  OR  ?id={channelId}
+   * Response JSON:    { channelId, channelTitle, videos: [{id, title, channelTitle}] }
+   */
+  async function fetchYouTubeChannel(channelRef, workerUrl) {
+    const base = workerUrl.replace(/\/$/, "");
+    const param = channelRef.type === "id"
+      ? `id=${encodeURIComponent(channelRef.value)}`
+      : `handle=${encodeURIComponent(channelRef.value)}`;
+    const endpoint = `${base}/channel?${param}`;
+    let res;
+    try {
+      res = await fetch(endpoint);
+    } catch (e) {
+      throw new Error(`Workerへの接続に失敗しました（${e.message}）`);
+    }
+    if (!res.ok) {
+      let detail = "";
+      try { const j = await res.json(); detail = j.error || ""; } catch {}
+      throw new Error(`Worker エラー（HTTP ${res.status}）${detail ? ": " + detail : ""}`);
+    }
+    const data = await res.json();
+    if (!data.videos?.length) {
+      throw new Error("チャンネルに動画が見つかりませんでした");
+    }
+    return data;
+  }
+
   /* ════════════════════════════════════════════
      Import-source update checking
      ─────────────────────────────────────────
@@ -375,6 +416,30 @@ function iconMarkup(name, cls = "icon") {
             url: `https://www.youtube.com/watch?v=${v.id}`,
             title: v.title,
             artist: v.channelTitle || "",
+          })),
+        };
+      }
+      case "youtube_channel": {
+        const workerUrl = appSettings.yt_worker_url || "";
+        if (!workerUrl) {
+          throw new Error("YouTube Worker URLが未設定です（設定画面で確認してください）");
+        }
+        // Prefer the stored channelId (stable) over re-parsing the handle
+        // from the URL (a handle could theoretically be changed by the
+        // channel owner, whereas the channel ID never changes).
+        const channelRef = source.sourceMeta?.channelId
+          ? { type: "id", value: source.sourceMeta.channelId }
+          : Services.extractYouTubeChannelRef(source.sourceUrl);
+        if (!channelRef) throw new Error("チャンネルURLを解釈できませんでした");
+        const result = await fetchYouTubeChannel(channelRef, workerUrl);
+        return {
+          collectionName: result.channelTitle,
+          items: result.videos.map((v) => ({
+            service: "youtube",
+            sourceId: v.id,
+            url: `https://www.youtube.com/watch?v=${v.id}`,
+            title: v.title,
+            artist: v.channelTitle || result.channelTitle || "",
           })),
         };
       }
@@ -510,6 +575,7 @@ function iconMarkup(name, cls = "icon") {
   let pendingSourceUpdates = []; // [{ playlistId, sourceUrl, newItems, collectionName }]
 
   async function runAutoUpdateCheck() {
+    if (!appSettings.auto_update_check) return; // ユーザー設定でオフ
     if (!state.playlists.some((p) => (p.importSources || []).length > 0)) return; // nothing tracked
     try {
       const results = await checkAllImportSourcesForUpdates();
@@ -810,23 +876,38 @@ function iconMarkup(name, cls = "icon") {
     radioMode = !radioMode;
 
     if (radioMode) {
-      // シャッフルで開始する設定がオンで、かつ現在シャッフルがオフなら有効にする
-      if (appSettings.radio_shuffle_on_start && !shuffleMode) {
-        shuffleMode = true;
-        buildShuffleQueue();  // cursor → -1
-        persistPlayerPrefs();
+      // ── RADIO ON = 「今表示しているリストを連続再生する」 ──
+      // 表示中のリストを再生対象に固定する。既に別リストを再生中でも
+      // 表示中リストへ切り替えて最初から流し始める（それがユーザーの意図）。
+      const viewTracks = getViewTracks();
+      if (viewTracks.length === 0) {
+        radioMode = false;
+        showToast("このリストにはトラックがありません");
+        renderRadioUI();
+        return;
       }
 
-      // 自動再生開始設定がオンで、現在再生中でなければ表示中のプレイリストから再生
-      if (appSettings.radio_autostart && !playing && getViewTracks().length > 0) {
-        // シャッフルの場合は表示中プレイリストでキューを再構築してから開始
-        if (shuffleMode) {
-          // playingPlaylistId を先に合わせてから buildShuffleQueue を呼ぶ
-          playingPlaylistId = viewPlaylistId;
-          buildShuffleQueue();
-        }
-        const firstTrack = shuffleMode ? nextTrack(false) : getViewTracks()[0];
-        if (firstTrack) playTrack(firstTrack, { syncView: false }); // ビューはそのまま
+      const switchingList = playingPlaylistId !== viewPlaylistId;
+      playingPlaylistId = viewPlaylistId;
+
+      // シャッフル開始設定
+      if (appSettings.radio_shuffle_on_start && !shuffleMode) {
+        shuffleMode = true;
+        persistPlayerPrefs();
+      }
+      // リストが切り替わった場合はキューを必ず再構築
+      if (shuffleMode) {
+        buildShuffleQueue(); // cursor → -1
+      } else if (switchingList) {
+        shuffleQueue = [];
+        shuffleQueueIndex = -1;
+      }
+
+      // 再生していない、または別リストを再生していた場合は
+      // 表示中リストの先頭（シャッフル時はランダム）から開始
+      if (!playing || switchingList) {
+        const firstTrack = shuffleMode ? nextTrack(false) : viewTracks[0];
+        if (firstTrack) playTrack(firstTrack, { syncView: false });
       }
     }
 
@@ -895,6 +976,41 @@ function iconMarkup(name, cls = "icon") {
       } catch (e) {
         setAddTrackLoading(false);
         showAddError(e.message || "プレイリストの取得に失敗しました");
+      }
+      return;
+    }
+
+    if (service === "youtube_channel") {
+      const channelRef = Services.extractYouTubeChannelRef(url);
+      if (!channelRef) { showAddError("YouTubeチャンネルのURLを確認してください"); return; }
+      const workerUrl = appSettings.yt_worker_url || "";
+      if (!workerUrl) {
+        showAddError(
+          "YouTubeチャンネルの一括追加にはCloudflare Workerの設定が必要です。設定画面の「YOUTUBE」→「プレイリスト取得 Worker URL」を入力してください。"
+        );
+        return;
+      }
+      setAddTrackLoading(true, "YouTubeチャンネルの動画一覧を取得中…");
+      try {
+        const result = await fetchYouTubeChannel(channelRef, workerUrl);
+        setAddTrackLoading(false);
+        openBulkImportPreview({
+          collectionName: result.channelTitle,
+          serviceLabel: "YouTube",
+          sourceUrl: url,
+          sourceType: "youtube_channel",
+          sourceMeta: { channelId: result.channelId },
+          items: result.videos.map((v) => ({
+            service: "youtube",
+            sourceId: v.id,
+            url: `https://www.youtube.com/watch?v=${v.id}`,
+            title: v.title,
+            artist: v.channelTitle || result.channelTitle || "",
+          })),
+        });
+      } catch (e) {
+        setAddTrackLoading(false);
+        showAddError(e.message || "チャンネルの取得に失敗しました");
       }
       return;
     }
@@ -1245,7 +1361,14 @@ function iconMarkup(name, cls = "icon") {
     const pl = targetPlaylistId
       ? state.playlists.find((p) => p.id === targetPlaylistId) || getActivePlaylist()
       : getActivePlaylist();
-    const toAdd = items.filter((_, i) => selected.has(i));
+
+    // Skip items that already exist in the target playlist (same service +
+    // sourceId), so re-importing an overlapping channel/playlist/show
+    // doesn't create duplicate rows for tracks the user already has.
+    const existingKeys = new Set(pl.tracks.map((t) => `${t.service}:${t.sourceId}`));
+    const toAddAll = items.filter((_, i) => selected.has(i));
+    const toAdd = toAddAll.filter((item) => !existingKeys.has(`${item.service}:${item.sourceId}`));
+    const skippedCount = toAddAll.length - toAdd.length;
 
     const newTrackIds = [];
     toAdd.forEach((item) => {
@@ -1279,9 +1402,10 @@ function iconMarkup(name, cls = "icon") {
     closeBulkImportModal();
     removeLinkFallbackBtn();
     renderAll();
+    const skippedNote = skippedCount > 0 ? `（${skippedCount}件は既存のため除外）` : "";
     showToast(
       isUpdateCheck
-        ? `「${pl.name}」に新しいトラックを ${toAdd.length} 件追加しました`
+        ? `「${pl.name}」に新しいトラックを ${toAdd.length} 件追加しました${skippedNote}`
         : `${toAdd.length} 件のトラックを追加しました`
     );
   }
@@ -1331,8 +1455,17 @@ function iconMarkup(name, cls = "icon") {
   }
 
   function commitNewTrack({ service, sourceId, url, title, artist }) {
-    const track = { id: `t${Date.now()}`, title, artist, service, sourceId, url };
     const pl = getActivePlaylist();
+
+    // Warn on exact duplicates (same service + sourceId already in this
+    // playlist) — most often an accidental double-paste of the same URL.
+    const isDuplicate = pl.tracks.some((t) => t.service === service && t.sourceId === sourceId);
+    if (isDuplicate) {
+      const ok = window.confirm(`「${title}」は既にこのリストにあります。それでも追加しますか？`);
+      if (!ok) return;
+    }
+
+    const track = { id: `t${Date.now()}`, title, artist, service, sourceId, url };
     pl.tracks.push(track);
     persist();
 
@@ -1378,12 +1511,17 @@ function iconMarkup(name, cls = "icon") {
   }
 
   function removeTrack(trackId) {
+    const pl = getActivePlaylist();
+    if (appSettings.confirm_track_delete) {
+      const track = pl.tracks.find((t) => t.id === trackId);
+      const ok = window.confirm(`「${track?.title || "このトラック"}」をリストから削除しますか？`);
+      if (!ok) return;
+    }
     if (currentTrackId === trackId) {
       playing = false;
       currentTrackId = null;
       stopAllEngines();
     }
-    const pl = getActivePlaylist();
     pl.tracks = pl.tracks.filter((t) => t.id !== trackId);
     persist();
     renderAll();
@@ -1840,7 +1978,6 @@ function iconMarkup(name, cls = "icon") {
     pp.nextBtn.addEventListener("click", skipNext);
     pp.playBtn.addEventListener("click", togglePlayPause);
     if (pp.repeatBtn) pp.repeatBtn.addEventListener("click", cycleRepeat);
-    pp.radioBtn.addEventListener("click", toggleRadioMode);
     pp.volumeSlider.addEventListener("input", (e) => setVolumeValue(+e.target.value));
     wireSeekableTrack(pp.progressTrack, () => duration, seekTo);
     PlayerPanel.buildWaveform(pp.waveformEl);
@@ -1965,18 +2102,21 @@ function iconMarkup(name, cls = "icon") {
   }
 
   function renderRadioUI() {
-    const dbLabel = $("#dbRadioBtnLabel");
-    if (dbLabel) dbLabel.textContent = radioMode ? "ON" : "OFF";
-    dbRadioBtn.classList.toggle("active", radioMode);
+    if (headerRadioBtnLabel) headerRadioBtnLabel.textContent = radioMode ? "ON" : "RADIO";
+    if (headerRadioBtn) headerRadioBtn.classList.toggle("active", radioMode);
+
+    // Show "◆◆ から連続再生中" hint in the player panels when RADIO is on,
+    // so it's clear which playlist is being broadcast even if the user
+    // has scrolled or is looking at the mini player.
+    const playingPl = state.playlists.find((p) => p.id === playingPlaylistId);
     [ppDesktop, ppMobile].forEach((pp) => {
-      if (!pp) return;
-      const label = pp.radioBtn.querySelector(".pp-radio-label");
-      if (label) {
-        label.textContent = radioMode
-          ? "RADIO ON — 自動連続再生中"
-          : "RADIO — タップで連続再生";
+      if (!pp || !pp.playingFromEl) return;
+      if (radioMode && playingPl) {
+        pp.playingFromEl.hidden = false;
+        pp.playingFromLabel.textContent = `「${playingPl.name}」を連続再生中`;
+      } else {
+        pp.playingFromEl.hidden = true;
       }
-      pp.radioBtn.classList.toggle("active", radioMode);
     });
   }
 
@@ -2032,7 +2172,8 @@ function iconMarkup(name, cls = "icon") {
 
   /** Show a dialog letting the user enter their Spotify Client ID at runtime. */
   function promptForClientId() {
-    const current = SpotifyAuth.getClientId();
+    const current = escapeHtmlText(SpotifyAuth.getClientId());
+    const redirectUriSafe = escapeHtmlText(SpotifyAuth.redirectUri());
     const modal = document.createElement("div");
     modal.style.cssText = `
       position:fixed; inset:0; background:rgba(5,5,10,.75); backdrop-filter:blur(3px);
@@ -2048,7 +2189,7 @@ function iconMarkup(name, cls = "icon") {
           <a href="https://developer.spotify.com/dashboard" target="_blank"
              style="color:#1DB954;">developer.spotify.com/dashboard</a>
           でアプリを作成し、Client ID をコピーして貼り付けてください。<br>
-          Redirect URI に <code style="font-size:11px; color:#aaa;">${SpotifyAuth.redirectUri()}</code> を登録してください。
+          Redirect URI に <code style="font-size:11px; color:#aaa;">${redirectUriSafe}</code> を登録してください。
         </p>
         <input id="clientIdInput" type="text" placeholder="例: a1b2c3d4e5f6..." value="${current}"
           style="background:#1a1a2a; border:1px solid #2a2a3a; border-radius:8px;
@@ -2189,7 +2330,7 @@ function iconMarkup(name, cls = "icon") {
   dbPrevBtn.addEventListener("click", skipPrev);
   dbNextBtn.addEventListener("click", skipNext);
   dbPlayBtn.addEventListener("click", togglePlayPause);
-  dbRadioBtn.addEventListener("click", toggleRadioMode);
+  headerRadioBtn.addEventListener("click", toggleRadioMode);
   if (dbShuffleBtn) dbShuffleBtn.addEventListener("click", toggleShuffle);
   if (dbRepeatBtn)  dbRepeatBtn.addEventListener("click", cycleRepeat);
   dbVolumeSlider.addEventListener("input", (e) => setVolumeValue(+e.target.value));

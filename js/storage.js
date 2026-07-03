@@ -57,8 +57,10 @@ const Storage = (() => {
   function save(state) {
     try {
       localStorage.setItem(KEY, JSON.stringify(state));
+      return true;
     } catch (e) {
       console.warn("Storage save failed:", e);
+      return false;
     }
   }
 

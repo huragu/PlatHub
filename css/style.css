@@ -233,6 +233,13 @@ input::placeholder { color: var(--text-ghost); }
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  gap: 12px;
+}
+.tracks-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .tracks-title {
   font-family: var(--font-display);
@@ -243,6 +250,24 @@ input::placeholder { color: var(--text-ghost); }
   font-size: 11px;
   color: var(--text-faint);
   margin-top: 2px;
+}
+
+/* ═══ "now broadcasting" hint in the player panel ═══ */
+.pp-playing-from {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: rgba(233, 69, 96, 0.08);
+  margin-top: 4px;
+}
+.pp-playing-from .icon {
+  color: var(--red);
+  width: 0.95em;
+  height: 0.95em;
 }
 
 /* ═══ Add form ═══ */

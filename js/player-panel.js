@@ -41,7 +41,8 @@ const PlayerPanel = (() => {
       progressFill: root.querySelector(".pp-fill"),
       progressHandle: root.querySelector(".pp-handle"),
       volumeSlider: root.querySelector(".pp-volume"),
-      radioBtn: root.querySelector(".pp-radio"),
+      playingFromEl: root.querySelector(".pp-playing-from"),
+      playingFromLabel: root.querySelector(".pp-playing-from-label"),
     };
   }
 

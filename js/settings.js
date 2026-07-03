@@ -21,9 +21,10 @@ const Settings = (() => {
     vol_youtube:          1.0,
     vol_spotify:          1.0,
     vol_podcast:          1.0,
-    radio_autostart:      false,
     radio_shuffle_on_start: false,
-    yt_worker_url:        "",   // Cloudflare Worker URL for YouTube playlist fetch
+    auto_update_check:    true,   // 起動時に自動でインポート元の新着をチェックする
+    confirm_track_delete: false,  // トラック削除ボタンに確認ダイアログを挟む
+    yt_worker_url:        "",     // Cloudflare Worker URL for YouTube playlist/channel fetch
   };
 
   /* ── Persistence ── */
@@ -151,33 +152,74 @@ const Settings = (() => {
     const radioSection = section("ラジオ / 自動再生");
 
     radioSection.appendChild(row(
-      "RADIO ON 時に自動再生開始",
-      toggle("radio_autostart", prefs.radio_autostart, v => {
-        prefs.radio_autostart = v;
-        onPrefsChange(prefs);
-      }),
-      "RADIOをオンにしたときに先頭から自動で再生を始める"
-    ));
-
-    radioSection.appendChild(row(
-      "自動再生をシャッフルで開始",
+      "RADIO開始時にシャッフルする",
       toggle("radio_shuffle_on_start", prefs.radio_shuffle_on_start, v => {
         prefs.radio_shuffle_on_start = v;
         onPrefsChange(prefs);
       }),
-      "自動再生開始時にシャッフルをオンにする（「RADIO ON 時に自動再生開始」が有効のとき機能します）"
+      "RADIOボタンを押して連続再生を始めるとき、シャッフルもオンにする"
     ));
 
     container.appendChild(radioSection);
 
-    /* ─ 3. YouTube ─ */
-    const ytSection = section("YouTube");
+    /* ─ 2.5. 動作設定（オンオフ切替できる機能） ─ */
+    const behaviorSection = section("動作設定");
 
-    // Worker URL input for playlist bulk-add
+    behaviorSection.appendChild(row(
+      "新着の自動チェック",
+      toggle("auto_update_check", prefs.auto_update_check, v => {
+        prefs.auto_update_check = v;
+        onPrefsChange(prefs);
+      }),
+      "起動時に、追加済みのYouTubeチャンネル・プレイリストやSpotifyの新着を自動確認する（オフにすると「更新を確認」ボタンからの手動チェックのみになります）"
+    ));
+
+    behaviorSection.appendChild(row(
+      "トラック削除前に確認する",
+      toggle("confirm_track_delete", prefs.confirm_track_delete, v => {
+        prefs.confirm_track_delete = v;
+        onPrefsChange(prefs);
+      }),
+      "トラックの✕ボタンを押したときに確認ダイアログを表示する（誤操作防止）"
+    ));
+
+    container.appendChild(behaviorSection);
+
+    /* ─ 4. 使い方 ─ */
+    const guideSection = section("使い方");
+    guideSection.appendChild(el("div", { class: "setting-guide", html: `
+      <p>URLを「+ 追加」欄に貼り付けると、サービスを自動判別して追加します。</p>
+      <ul>
+        <li><strong>YouTube</strong> — <code>youtube.com/watch?v=…</code> または <code>youtu.be/…</code></li>
+        <li><strong>YouTube プレイリスト</strong> — <code>youtube.com/playlist?list=…</code>（全動画プレビュー→一括追加）</li>
+        <li><strong>YouTube チャンネル</strong> — <code>youtube.com/@ハンドル名</code> 等（全動画プレビュー→一括追加）</li>
+        <li><strong>Spotify 単曲・エピソード</strong> — <code>open.spotify.com/track/…</code> または <code>/episode/…</code>（要ログイン）</li>
+        <li><strong>Spotify リスト・番組</strong> — <code>/playlist/…</code>・<code>/album/…</code>・<code>/show/…</code>（全曲プレビュー→一括追加）</li>
+        <li><strong>Apple Podcasts 番組</strong> — <code>podcasts.apple.com/…</code>（全話プレビュー→一括追加）</li>
+        <li><strong>MP3 直リンク</strong> — <code>.mp3 / .m4a / .ogg</code> など</li>
+        <li><strong>Podcastフィード</strong> — <code>*.rss</code> 等、任意のRSS/Atomフィード（全話プレビュー→一括追加）</li>
+      </ul>
+      <p><strong>RADIO</strong>（${iconMarkup("radio", "icon icon-inline")}）ボタンは、今表示しているリストの連続再生を始めます。
+      トラック一覧の見出し右、「+ 追加」の隣にあります。</p>
+      <p><strong>シャッフル</strong>（${iconMarkup("shuffle", "icon icon-inline")}）と<strong>リピート</strong>（${iconMarkup("repeat", "icon icon-inline")}）はプレーヤーバー中央のボタンで切り替えられます。</p>
+      <p>一括追加したYouTubeチャンネル・プレイリストやSpotifyのリストは、トラック一覧の上部に表示される
+      「更新を確認」から新着の有無をいつでもチェックできます。</p>
+    ` }));
+    container.appendChild(guideSection);
+
+    /* ─ 5. 詳細設定（上級者向け） ─ */
+    const advancedSection = section("詳細設定（上級者向け）");
+
+    const advancedIntro = el("div", { class: "setting-guide" },
+      "ここから下は普段は触らなくて大丈夫です。YouTubeのプレイリストやチャンネルを丸ごと追加したい場合のみ設定してください。"
+    );
+    advancedSection.appendChild(advancedIntro);
+
+    // Worker URL input for playlist/channel bulk-add
     const ytWorkerRow = el("div", { class: "setting-row setting-row-col" });
-    const ytWorkerLabel = el("div", { class: "setting-row-label" }, "プレイリスト取得 Worker URL");
+    const ytWorkerLabel = el("div", { class: "setting-row-label" }, "プレイリスト/チャンネル取得 Worker URL");
     const ytWorkerDesc = el("div", { class: "setting-row-desc" },
-      "YouTubeプレイリストURLを一括追加するためのCloudflare Worker URL。未設定の場合は単曲追加のみ可能です。"
+      "YouTubeのプレイリストやチャンネルを一括追加するためのCloudflare Worker URL。未設定の場合は動画を1件ずつ追加できます。"
     );
     ytWorkerLabel.appendChild(ytWorkerDesc);
 
@@ -195,80 +237,13 @@ const Settings = (() => {
     ytWorkerWrap.appendChild(ytWorkerInput);
     ytWorkerRow.appendChild(ytWorkerLabel);
     ytWorkerRow.appendChild(ytWorkerWrap);
-    ytSection.appendChild(ytWorkerRow);
+    advancedSection.appendChild(ytWorkerRow);
 
-    ytSection.appendChild(el("div", { class: "setting-guide", html: `
-      <p>Cloudflare Worker を使うと、YouTube Data API を安全に呼び出してプレイリストを丸ごと追加できます。</p>
-      <p>Worker のコードと設定手順は <code>README.md</code> に記載しています。</p>
+    advancedSection.appendChild(el("div", { class: "setting-guide", html: `
+      <p>設定方法は <code>README.md</code> に記載しています。</p>
     ` }));
 
-    ytSection.appendChild(el("div", { class: "setting-guide", html: `
-      <p><strong>広告について</strong> — PlatHubはYouTube公式のIFrame Player APIで再生しているため、
-      広告を消す機能はアプリ側には実装できません（YouTube側の仕様上の制約です）。</p>
-
-      <p>広告が出るかどうかには、独立した3つの要因が関わります。</p>
-
-      <p><strong>① 動画自体に広告が入っているか</strong><br>
-      埋め込み動画は youtube.com 本体と同じ広告設定を引き継ぎます。チャンネル側が
-      その動画で広告を有効にしていなければ、そもそも誰が見ても広告は出ません。</p>
-
-      <p><strong>② YouTube Premiumアカウントでログインしているか</strong><br>
-      Premiumはサーバー側で広告を取り除く仕組みのため、ブラウザの設定とは別の話です。
-      YouTube公式ヘルプ
-      （<a href="https://support.google.com/youtube/answer/7437519" target="_blank" rel="noopener">support.google.com/youtube/answer/7437519</a>）
-      では、埋め込み動画で広告が出る場合の対処として「YouTubeのCookieをブロックしていないか確認する」ことが
-      案内されています。Premiumアカウントでログイン＋Cookie許可の状態であれば、埋め込みでも
-      広告なしになることをYouTube自身が想定しているとみてよさそうです。</p>
-
-      <p style="color:#999;">ただし保証ではありません。YouTube公式コミュニティには「Premium契約中なのに
-      埋め込み動画で広告が出る」という報告も複数あり、解消しないケースが実際に存在します。</p>
-
-      <p><strong>③ 広告ブロッカー拡張機能（uBlock Originなど）</strong><br>
-      Premiumとは別の、無料の代替手段です。ただしPlatHubの埋め込みプレーヤーで実際に効くかは
-      未検証で、YouTube側もブロッカー検出を年々強化しており、検出されると警告や再生停止に
-      つながることがあります。安定した方法ではないため積極的にはおすすめしていません。</p>
-
-      <p>Premiumの効果を確認する項目：</p>
-      <ul>
-        <li>別タブで youtube.com を開き、右上のアカウントがPremium契約のものになっているか</li>
-        <li>ブラウザの「サードパーティCookieをブロックする」設定がオフになっているか
-        （Chrome: 設定 → プライバシーとセキュリティ → Cookie）</li>
-        <li>シークレット/プライベートウィンドウでは反映されにくいため、通常ウィンドウで利用する</li>
-      </ul>
-    ` }));
-
-    container.appendChild(ytSection);
-
-    /* ─ 4. 使い方 ─ */
-    const guideSection = section("使い方");
-    guideSection.appendChild(el("div", { class: "setting-guide", html: `
-      <p>URLを「+ 追加」欄に貼り付けると、サービスを自動判別して追加します。</p>
-      <ul>
-        <li><strong>YouTube</strong> — <code>youtube.com/watch?v=…</code> または <code>youtu.be/…</code></li>
-        <li><strong>Spotify 単曲</strong> — <code>open.spotify.com/track/…</code>（要ログイン）</li>
-        <li><strong>Spotify リスト</strong> — <code>open.spotify.com/playlist/…</code> または <code>/album/…</code>（全曲プレビュー→一括追加）</li>
-        <li><strong>Apple Podcasts 番組</strong> — <code>podcasts.apple.com/…</code>（全話プレビュー→一括追加）</li>
-        <li><strong>MP3 直リンク</strong> — <code>.mp3 / .m4a / .ogg</code> など</li>
-        <li><strong>Podcastフィード</strong> — <code>*.rss</code> 等、任意のRSS/Atomフィード（全話プレビュー→一括追加）</li>
-      </ul>
-      <p><strong>ラジオモード</strong>（${iconMarkup("radio", "icon icon-inline")}）をオンにするとプレイリストをループ再生します。</p>
-      <p><strong>シャッフル</strong>（${iconMarkup("shuffle", "icon icon-inline")}）と<strong>リピート</strong>（${iconMarkup("repeat", "icon icon-inline")}）はプレーヤーバー中央のボタンで切り替えられます。</p>
-    ` }));
-    container.appendChild(guideSection);
-
-    /* ─ 5. 利用規約 ─ */
-    const tosSection = section("利用規約");
-    tosSection.appendChild(el("div", { class: "setting-guide", html: `
-      <p>本アプリは個人利用を目的として作成されています。</p>
-      <ul>
-        <li>YouTube・Spotify・Apple Podcasts 等の各サービスの利用規約に従って使用してください。</li>
-        <li>各サービスのコンテンツの著作権は各権利者に帰属します。</li>
-        <li>本アプリは非商用・個人利用のツールです。商用利用や再配布は行わないでください。</li>
-        <li>本アプリの使用によって生じたいかなる損害についても、作成者は責任を負いかねます。</li>
-        <li>Spotify 連携には Spotify Premium アカウントが必要です（Spotify 社の仕様）。</li>
-      </ul>
-    ` }));
-    container.appendChild(tosSection);
+    container.appendChild(advancedSection);
 
     /* ─ 6. 作成者 ─ */
     const aboutSection = section("作成者");

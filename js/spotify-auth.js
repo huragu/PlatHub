@@ -2,11 +2,14 @@
    spotify-auth.js
    OAuth2 Authorization Code + PKCE flow for Spotify.
 
-   Client ID の設定方法（2通り）:
-   A) このファイルの HARDCODED_CLIENT_ID に直接貼り付けて再デプロイ。
-   B) アプリのヘッダーにある「Spotifyでログイン」ボタンをクリック→
-      ダイアログに Client ID を入力→保存。ファイル編集は不要。
-      localStorage に保存されるので次回以降も有効。
+   ベータ公開時の設定方法:
+   デプロイ前に、下の HARDCODED_CLIENT_ID にご自身の Spotify Client ID を
+   貼り付けてください。これにより、訪問者は個別設定なしで「Spotifyで
+   ログイン」を押すだけで使えるようになります（一般公開時はこちらを推奨）。
+
+   個人利用や動作確認だけなら、ヘッダーの「Spotifyでログイン」ボタンから
+   ダイアログ経由で入力することも可能です（localStorageに保存され、
+   HARDCODED_CLIENT_ID より優先されます）。
 
    Client ID の取得: https://developer.spotify.com/dashboard
    （取得手順は README.md を参照）
@@ -15,8 +18,8 @@
 const SpotifyAuth = (() => {
 
   // ── Client ID ────────────────────────────────────────
-  // ファイルを直接編集する場合はここに貼り付ける（任意）。
-  // 空のままでも、アプリ内のダイアログから設定できます。
+  // ベータ公開前に、ここにご自身の Spotify Client ID を貼り付けてください。
+  // 一般ユーザーはこの値を自動的に使うため、個別設定は不要になります。
   const HARDCODED_CLIENT_ID = "YOUR_SPOTIFY_CLIENT_ID_HERE";
 
   const CLIENT_ID_KEY  = "mixcast_spotify_client_id";

@@ -6,6 +6,7 @@ const Services = (() => {
   const META = {
     youtube:            { label: "YouTube",  cssClass: "badge-youtube" },
     youtube_playlist:   { label: "YouTube",  cssClass: "badge-youtube" }, // playlist-only URL → bulk import
+    youtube_channel:    { label: "YouTube",  cssClass: "badge-youtube" }, // channel URL → bulk import (all uploads)
     spotify_track:      { label: "Spotify",  cssClass: "badge-spotify" },
     spotify_episode:    { label: "Spotify",  cssClass: "badge-spotify" }, // single podcast episode
     spotify_collection: { label: "Spotify",  cssClass: "badge-spotify" }, // playlist/album/show → bulk import
@@ -37,6 +38,12 @@ const Services = (() => {
    */
   function detect(url) {
     if (!url) return "link";
+    // YouTube channel: @handle, /channel/UCxxxx, /c/name, /user/name
+    // (checked before /watch|playlist since these paths don't overlap,
+    // but ordering keeps intent clear: channel URLs are never video URLs)
+    if (/youtube\.com\/(@[\w.-]+|channel\/UC[\w-]+|c\/[\w.-]+|user\/[\w.-]+)(?:[/?#]|$)/.test(url)) {
+      return "youtube_channel";
+    }
     // YouTube: watch, short URL, playlist-only URL (youtube.com/playlist?list=...)
     if (/youtube\.com\/(watch|playlist|shorts)|youtu\.be\//.test(url)) {
       // Has a video ID → single video. Has only list= → playlist collection.
@@ -74,6 +81,27 @@ const Services = (() => {
   function extractYouTubePlaylistId(url) {
     const m = url.match(/[?&]list=([A-Za-z0-9_-]+)/);
     return m ? m[1] : null;
+  }
+
+  /**
+   * Extract a channel reference from a YouTube channel URL.
+   * Returns { type: "id", value: "UCxxxx" } for /channel/UCxxxx URLs,
+   * or { type: "handle", value: "@name" } for @handle, /c/, /user/ URLs
+   * (all of which the Data API's forHandle= param can resolve — legacy
+   * /c/ and /user/ vanity URLs are treated as handles on a best-effort
+   * basis since YouTube now aliases most of them).
+   */
+  function extractYouTubeChannelRef(url) {
+    const idMatch = url.match(/youtube\.com\/channel\/(UC[\w-]+)/);
+    if (idMatch) return { type: "id", value: idMatch[1] };
+
+    const handleMatch = url.match(/youtube\.com\/(@[\w.-]+)/);
+    if (handleMatch) return { type: "handle", value: handleMatch[1] };
+
+    const legacyMatch = url.match(/youtube\.com\/(?:c|user)\/([\w.-]+)/);
+    if (legacyMatch) return { type: "handle", value: `@${legacyMatch[1]}` };
+
+    return null;
   }
 
   /**
@@ -130,7 +158,8 @@ const Services = (() => {
 
   return {
     detect, isDirectAudioUrl, extractYouTubeId, extractYouTubePlaylistId,
-    extractApplePodcastIds, extractSpotifyTrackId, extractSpotifyEpisodeId,
+    extractYouTubeChannelRef, extractApplePodcastIds,
+    extractSpotifyTrackId, extractSpotifyEpisodeId,
     badgeHTML, badgeEl, formatTime, META,
   };
 })();

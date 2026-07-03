@@ -53,7 +53,12 @@
           <div class="tracks-title" id="activePlName">My Mix</div>
           <div class="tracks-sub" id="activePlCount">0 トラック</div>
         </div>
-        <button class="btn-outline" id="toggleAddForm">+ 追加</button>
+        <div class="tracks-header-actions">
+          <button class="btn-outline radio-btn" id="headerRadioBtn" title="このリストを連続再生">
+            <svg class="icon"><use href="#icon-radio"></use></svg><span class="radio-btn-label" id="headerRadioBtnLabel">RADIO</span>
+          </button>
+          <button class="btn-outline" id="toggleAddForm">+ 追加</button>
+        </div>
       </div>
 
       <div class="add-form" id="addForm" hidden>
@@ -145,9 +150,6 @@
         <span class="onair-dot"></span>
         <span class="onair-text">ON AIR</span>
       </div>
-      <button class="radio-btn" id="dbRadioBtn">
-        <svg class="icon"><use href="#icon-radio"></use></svg><span class="radio-btn-label" id="dbRadioBtnLabel">OFF</span>
-      </button>
       <input type="range" id="dbVolumeSlider" class="volume-slider" min="0" max="1" step="0.02" value="0.8">
     </div>
   </div>
@@ -249,9 +251,10 @@
       <span class="vol-icon"><svg class="icon"><use href="#icon-volume-high"></use></svg></span>
     </div>
   </div>
-  <button class="radio-btn-large pp-radio">
-    <svg class="icon"><use href="#icon-radio"></use></svg><span class="pp-radio-label">RADIO — タップで連続再生</span>
-  </button>
+  <div class="pp-playing-from" hidden>
+    <svg class="icon icon-inline"><use href="#icon-broadcast"></use></svg>
+    <span class="pp-playing-from-label"></span>
+  </div>
 </template>
 
 <script src="https://www.youtube.com/iframe_api"></script>
