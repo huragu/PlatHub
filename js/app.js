@@ -94,15 +94,45 @@ function iconMarkup(name, cls = "icon") {
    * never restarts an in-progress or already-finished marquee for the
    * same title. Skips animation entirely for prefers-reduced-motion users.
    *
+   * Hidden-element safe: if the element is currently invisible (e.g. an
+   * inactive mobile tab, or a panel not yet mounted into visible layout),
+   * scrollWidth/clientWidth would both read as 0 and incorrectly look
+   * like "no overflow". To avoid permanently mis-measuring in that case,
+   * this deliberately does NOT record the text as "settled" while the
+   * element is hidden — so the very next call for the same text (the next
+   * poll tick, or a render triggered once the element becomes visible,
+   * e.g. after switching mobile tabs) retries the measurement properly.
+   *
    * @param {HTMLElement} el - the display element (must allow overflow:hidden;
    *   white-space:nowrap in its base CSS — used as-is when not overflowing)
    * @param {string} text
    */
   const MARQUEE_ITERATIONS = 3;
+  function isMeasurable(el) {
+    return el.offsetParent !== null && el.clientWidth > 0;
+  }
   function applyMarqueeIfNeeded(el, text) {
     if (!el) return;
     text = text || "";
-    if (el.dataset.marqueeText === text) return; // unchanged — don't restart
+
+    if (!isMeasurable(el)) {
+      // Can't reliably measure while hidden — show plain text but leave
+      // dataset.marqueeKey UNSET so a future call (once visible) retries.
+      if (el.dataset.marqueeText === text) return; // already showing this, nothing to do
+      if (el._marqueeCleanup) { el._marqueeCleanup(); el._marqueeCleanup = null; }
+      el.classList.remove("marquee-active");
+      el.textContent = text;
+      el.dataset.marqueeText = text;
+      delete el.dataset.marqueeKey;
+      return;
+    }
+
+    // Cache key includes the container width, not just the text, so
+    // resizing the window (which can change whether the SAME text
+    // overflows) also triggers a fresh check — not just track changes.
+    const key = `${text}::${el.clientWidth}`;
+    if (el.dataset.marqueeKey === key) return; // already settled for this text+width
+    el.dataset.marqueeKey = key;
 
     el.dataset.marqueeText = text;
     if (el._marqueeCleanup) { el._marqueeCleanup(); el._marqueeCleanup = null; }
@@ -113,7 +143,13 @@ function iconMarkup(name, cls = "icon") {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     requestAnimationFrame(() => {
-      if (el.dataset.marqueeText !== text) return; // superseded by a newer change
+      if (el.dataset.marqueeKey !== key) return; // superseded by a newer change
+      if (!isMeasurable(el)) {
+        // Became hidden between the sync check and this frame — don't
+        // commit a possibly-wrong "no overflow" conclusion; let it retry.
+        delete el.dataset.marqueeKey;
+        return;
+      }
       const overflowPx = el.scrollWidth - el.clientWidth;
       if (overflowPx <= 4) return; // fits fine as-is — leave plain ellipsis truncation
 
@@ -133,7 +169,7 @@ function iconMarkup(name, cls = "icon") {
 
       const onEnd = () => {
         inner.removeEventListener("animationend", onEnd);
-        if (el.dataset.marqueeText !== text) return; // superseded meanwhile
+        if (el.dataset.marqueeKey !== key) return; // superseded meanwhile
         el.classList.remove("marquee-active");
         el.textContent = text;
       };
