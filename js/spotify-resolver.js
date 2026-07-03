@@ -106,18 +106,19 @@ const SpotifyResolver = (() => {
     const meta = await apiFetch(`/playlists/${id}?fields=name,owner.display_name`);
     const playlistName = meta.name || "Spotify Playlist";
 
+    const HARD_CAP = 500; // safety net against runaway pagination on huge playlists
+    const maxItems = opts.limit ? Math.min(opts.limit, HARD_CAP) : HARD_CAP;
+
     const tracks = [];
     let nextPath = `/playlists/${id}/tracks?limit=100&fields=next,items(track(id,name,artists,album.images,duration_ms))`;
 
-    while (nextPath) {
+    while (nextPath && tracks.length < maxItems) {
       const page = await apiFetch(nextPath);
       for (const item of page.items || []) {
         const episode = trackToEpisode(item.track);
         if (episode) tracks.push(episode);
-        if (opts.limit && tracks.length >= opts.limit) break;
+        if (tracks.length >= maxItems) break;
       }
-      if (opts.limit && tracks.length >= opts.limit) break;
-      // `next` from Spotify is a full URL; strip the API base to reuse apiFetch.
       nextPath = page.next ? page.next.replace("https://api.spotify.com/v1", "") : null;
     }
 
@@ -134,10 +135,13 @@ const SpotifyResolver = (() => {
     const albumName = meta.name || "Spotify Album";
     const albumArtist = (meta.artists || []).map((a) => a.name).join(", ");
 
+    const HARD_CAP = 500; // albums are rarely this large, but guard anyway
+    const maxItems = opts.limit ? Math.min(opts.limit, HARD_CAP) : HARD_CAP;
+
     const tracks = [];
     let nextPath = `/albums/${id}/tracks?limit=50`;
 
-    while (nextPath) {
+    while (nextPath && tracks.length < maxItems) {
       const page = await apiFetch(nextPath);
       for (const t of page.items || []) {
         tracks.push({
@@ -147,9 +151,8 @@ const SpotifyResolver = (() => {
           artwork: null, // track-level objects from this endpoint omit album images
           durationSec: t.duration_ms ? t.duration_ms / 1000 : null,
         });
-        if (opts.limit && tracks.length >= opts.limit) break;
+        if (tracks.length >= maxItems) break;
       }
-      if (opts.limit && tracks.length >= opts.limit) break;
       nextPath = page.next ? page.next.replace("https://api.spotify.com/v1", "") : null;
     }
 
@@ -170,17 +173,19 @@ const SpotifyResolver = (() => {
     const meta = await apiFetch(`/shows/${id}?fields=name,publisher`);
     const showName = meta.name || "Spotify Podcast";
 
+    const HARD_CAP = 500; // safety net — some long-running podcasts have 1000+ episodes
+    const maxItems = opts.limit ? Math.min(opts.limit, HARD_CAP) : HARD_CAP;
+
     const episodes = [];
     let nextPath = `/shows/${id}/episodes?limit=50`;
 
-    while (nextPath) {
+    while (nextPath && episodes.length < maxItems) {
       const page = await apiFetch(nextPath);
       for (const ep of page.items || []) {
         const item = episodeToItem(ep, showName);
         if (item) episodes.push(item);
-        if (opts.limit && episodes.length >= opts.limit) break;
+        if (episodes.length >= maxItems) break;
       }
-      if (opts.limit && episodes.length >= opts.limit) break;
       nextPath = page.next ? page.next.replace("https://api.spotify.com/v1", "") : null;
     }
 
