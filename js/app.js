@@ -873,42 +873,52 @@ function iconMarkup(name, cls = "icon") {
   }
 
   function toggleRadioMode() {
-    radioMode = !radioMode;
+    // The button's meaning depends on the RELATIONSHIP between what's
+    // playing and what's being viewed — not a blind flip of radioMode.
+    // See renderRadioUI() for the matching display logic.
+    const isActiveForView = radioMode && playingPlaylistId === viewPlaylistId;
 
-    if (radioMode) {
-      // ── RADIO ON = 「今表示しているリストを連続再生する」 ──
-      // 表示中のリストを再生対象に固定する。既に別リストを再生中でも
-      // 表示中リストへ切り替えて最初から流し始める（それがユーザーの意図）。
-      const viewTracks = getViewTracks();
-      if (viewTracks.length === 0) {
-        radioMode = false;
-        showToast("このリストにはトラックがありません");
-        renderRadioUI();
-        return;
-      }
+    if (isActiveForView) {
+      // Genuinely broadcasting the list I'm looking at → turn it off entirely.
+      radioMode = false;
+      renderRadioUI();
+      renderPlaybackModeUI();
+      renderOnAir();
+      return;
+    }
 
-      const switchingList = playingPlaylistId !== viewPlaylistId;
-      playingPlaylistId = viewPlaylistId;
+    // Otherwise: (re)start broadcasting the list I'm CURRENTLY VIEWING,
+    // regardless of whether something else was already playing/radio-ing.
+    // This covers both "RADIO was fully off" and "RADIO was on for a
+    // different list" — both cases redirect to the viewed list the same way.
+    const viewTracks = getViewTracks();
+    if (viewTracks.length === 0) {
+      showToast("このリストにはトラックがありません");
+      return;
+    }
 
-      // シャッフル開始設定
-      if (appSettings.radio_shuffle_on_start && !shuffleMode) {
-        shuffleMode = true;
-        persistPlayerPrefs();
-      }
-      // リストが切り替わった場合はキューを必ず再構築
-      if (shuffleMode) {
-        buildShuffleQueue(); // cursor → -1
-      } else if (switchingList) {
-        shuffleQueue = [];
-        shuffleQueueIndex = -1;
-      }
+    const switchingList = playingPlaylistId !== viewPlaylistId;
+    radioMode = true;
+    playingPlaylistId = viewPlaylistId;
 
-      // 再生していない、または別リストを再生していた場合は
-      // 表示中リストの先頭（シャッフル時はランダム）から開始
-      if (!playing || switchingList) {
-        const firstTrack = shuffleMode ? nextTrack(false) : viewTracks[0];
-        if (firstTrack) playTrack(firstTrack, { syncView: false });
-      }
+    // シャッフル開始設定
+    if (appSettings.radio_shuffle_on_start && !shuffleMode) {
+      shuffleMode = true;
+      persistPlayerPrefs();
+    }
+    // リストが切り替わった場合はキューを必ず再構築
+    if (shuffleMode) {
+      buildShuffleQueue(); // cursor → -1
+    } else if (switchingList) {
+      shuffleQueue = [];
+      shuffleQueueIndex = -1;
+    }
+
+    // 再生していない、または別リストを再生していた場合は
+    // 表示中リストの先頭（シャッフル時はランダム）から開始
+    if (!playing || switchingList) {
+      const firstTrack = shuffleMode ? nextTrack(false) : viewTracks[0];
+      if (firstTrack) playTrack(firstTrack, { syncView: false });
     }
 
     renderRadioUI();
@@ -1553,7 +1563,12 @@ function iconMarkup(name, cls = "icon") {
     if (viewPlaylistId === id) return; // already viewing this list
 
     // Only change what's displayed — never interrupt playback.
-    // The playing playlist (playingPlaylistId) stays untouched.
+    // The playing playlist (playingPlaylistId) and radioMode itself stay
+    // untouched here, so a list already broadcasting in the background
+    // keeps looping correctly even while the user browses elsewhere.
+    // (The RADIO button's displayed ON/OFF state is computed separately
+    // in renderRadioUI() based on whether the viewed list matches the
+    // playing list — see that function for details.)
     viewPlaylistId = id;
     state.activePlaylistId = id;
     persist();
@@ -2102,12 +2117,22 @@ function iconMarkup(name, cls = "icon") {
   }
 
   function renderRadioUI() {
-    if (headerRadioBtnLabel) headerRadioBtnLabel.textContent = radioMode ? "ON" : "RADIO";
-    if (headerRadioBtn) headerRadioBtn.classList.toggle("active", radioMode);
+    // The button's displayed state is relative to what's being VIEWED, not
+    // just the raw radioMode flag. If RADIO is broadcasting playlist A in
+    // the background but the user is currently looking at playlist B, the
+    // button shows its default "RADIO" (off-looking) state — pressing it
+    // will redirect the broadcast to B (see toggleRadioMode()). This never
+    // touches radioMode itself, so A keeps looping correctly in the
+    // background the whole time the user is browsing elsewhere.
+    const isActiveForView = radioMode && playingPlaylistId === viewPlaylistId;
+    if (headerRadioBtnLabel) headerRadioBtnLabel.textContent = isActiveForView ? "ON" : "RADIO";
+    if (headerRadioBtn) headerRadioBtn.classList.toggle("active", isActiveForView);
 
     // Show "◆◆ から連続再生中" hint in the player panels when RADIO is on,
     // so it's clear which playlist is being broadcast even if the user
-    // has scrolled or is looking at the mini player.
+    // has scrolled or is looking at the mini player. This uses the raw
+    // radioMode (not view-relative) since it's meant to reflect the actual
+    // background broadcast regardless of what's currently being viewed.
     const playingPl = state.playlists.find((p) => p.id === playingPlaylistId);
     [ppDesktop, ppMobile].forEach((pp) => {
       if (!pp || !pp.playingFromEl) return;
