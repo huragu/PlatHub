@@ -80,6 +80,68 @@ function iconMarkup(name, cls = "icon") {
     return div.innerHTML;
   }
 
+  /**
+   * Applies a temporary scrolling "marquee" reveal to a now-playing title/
+   * artist element, but ONLY when its text actually overflows the element's
+   * width. Runs a limited number of passes (MARQUEE_ITERATIONS), then
+   * settles back to the element's normal static ellipsis-truncated display
+   * — so this never loops forever, and short text that already fits is
+   * completely unaffected (no DOM restructuring happens at all in that case).
+   *
+   * Safe to call on every render, including from code that runs on a
+   * polling timer (e.g. the position-update tick): it no-ops immediately
+   * if `text` is unchanged from the last call for this element, so it
+   * never restarts an in-progress or already-finished marquee for the
+   * same title. Skips animation entirely for prefers-reduced-motion users.
+   *
+   * @param {HTMLElement} el - the display element (must allow overflow:hidden;
+   *   white-space:nowrap in its base CSS — used as-is when not overflowing)
+   * @param {string} text
+   */
+  const MARQUEE_ITERATIONS = 3;
+  function applyMarqueeIfNeeded(el, text) {
+    if (!el) return;
+    text = text || "";
+    if (el.dataset.marqueeText === text) return; // unchanged — don't restart
+
+    el.dataset.marqueeText = text;
+    if (el._marqueeCleanup) { el._marqueeCleanup(); el._marqueeCleanup = null; }
+    el.classList.remove("marquee-active");
+    el.textContent = text;
+    if (!text) return;
+
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    requestAnimationFrame(() => {
+      if (el.dataset.marqueeText !== text) return; // superseded by a newer change
+      const overflowPx = el.scrollWidth - el.clientWidth;
+      if (overflowPx <= 4) return; // fits fine as-is — leave plain ellipsis truncation
+
+      const inner = document.createElement("span");
+      inner.className = "marquee-inner";
+      inner.textContent = text;
+      el.textContent = "";
+      el.appendChild(inner);
+      el.classList.add("marquee-active");
+
+      // Scale duration with distance so long titles scroll at a roughly
+      // consistent reading speed rather than all taking the same time.
+      const duration = Math.min(14, Math.max(5, overflowPx / 28));
+      el.style.setProperty("--marquee-distance", `-${overflowPx}px`);
+      el.style.setProperty("--marquee-duration", `${duration}s`);
+      inner.style.animationIterationCount = String(MARQUEE_ITERATIONS);
+
+      const onEnd = () => {
+        inner.removeEventListener("animationend", onEnd);
+        if (el.dataset.marqueeText !== text) return; // superseded meanwhile
+        el.classList.remove("marquee-active");
+        el.textContent = text;
+      };
+      inner.addEventListener("animationend", onEnd);
+      el._marqueeCleanup = () => inner.removeEventListener("animationend", onEnd);
+    });
+  }
+
   const trackCountEl = $("#trackCount");
   const onairLamp = $("#onairLamp");
   const dbOnairLamp = $("#dbOnairLamp");
@@ -2020,8 +2082,8 @@ function iconMarkup(name, cls = "icon") {
     pp.badgeRow.innerHTML = "";
     if (t) pp.badgeRow.appendChild(Services.badgeEl(t.service));
 
-    pp.titleEl.textContent = t ? t.title : "トラックを選択して再生";
-    pp.artistEl.textContent = t?.artist || "";
+    applyMarqueeIfNeeded(pp.titleEl, t ? t.title : "トラックを選択して再生");
+    applyMarqueeIfNeeded(pp.artistEl, t?.artist || "");
 
     setIcon(pp.playBtn, playing ? "pause" : "play");
     pp.volumeSlider.value = volume;
@@ -2058,6 +2120,14 @@ function iconMarkup(name, cls = "icon") {
     updateMediaSessionPlaybackState();
   }
 
+  // Persistent dbMeta children — created once and reused, so their state
+  // (including any in-progress marquee animation on the artist span) isn't
+  // destroyed by the 500ms position-poll tick calling renderTransportShared()
+  // far more often than the track itself actually changes.
+  let dbMetaBadgeEl = null;
+  let dbMetaArtistEl = null;
+  let dbMetaLastService = undefined;
+
   function renderTransportShared() {
     const pct = duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
 
@@ -2070,21 +2140,34 @@ function iconMarkup(name, cls = "icon") {
     setIcon(dbPlayBtn, playing ? "pause" : "play");
 
     const t = getCurrentTrack();
-    dbTitle.textContent = t ? t.title : "未選択";
-    dbMeta.innerHTML = "";
-    if (t) {
-      dbMeta.appendChild(Services.badgeEl(t.service));
-      if (t.artist) {
-        const span = document.createElement("span");
-        span.textContent = t.artist;
-        dbMeta.appendChild(span);
+    applyMarqueeIfNeeded(dbTitle, t ? t.title : "未選択");
+
+    if (!t) {
+      dbMeta.innerHTML = "";
+      dbMetaBadgeEl = null;
+      dbMetaArtistEl = null;
+      dbMetaLastService = undefined;
+    } else {
+      // Only rebuild the badge when the service actually changes —
+      // avoids recreating DOM nodes (and disrupting the artist marquee)
+      // on every poll tick.
+      if (dbMetaLastService !== t.service || !dbMetaBadgeEl || !dbMeta.contains(dbMetaBadgeEl)) {
+        dbMeta.innerHTML = "";
+        dbMetaBadgeEl = Services.badgeEl(t.service);
+        dbMeta.appendChild(dbMetaBadgeEl);
+        dbMetaArtistEl = document.createElement("span");
+        dbMetaArtistEl.className = "db-meta-artist";
+        dbMeta.appendChild(dbMetaArtistEl);
+        dbMetaLastService = t.service;
       }
+      dbMetaArtistEl.hidden = !t.artist;
+      if (t.artist) applyMarqueeIfNeeded(dbMetaArtistEl, t.artist);
     }
 
     // Mobile minibar
     miniBar.hidden = !t || (isMobile() && mobileTab === "player");
     if (t) {
-      miniBarTitle.textContent = t.title;
+      applyMarqueeIfNeeded(miniBarTitle, t.title);
       miniBarProgressFill.style.width = `${pct}%`;
       setIcon(miniBarPlayBtn, playing ? "pause" : "play");
     }

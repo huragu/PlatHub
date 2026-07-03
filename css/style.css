@@ -337,9 +337,13 @@ input::placeholder { color: var(--text-ghost); }
   font-size: 13px;
   font-weight: 500;
   color: #ccc;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.35;
+  word-break: break-word;
 }
 .track-item.active .track-title { color: #fff; }
 .track-artist {
@@ -628,6 +632,9 @@ input::placeholder { color: var(--text-ghost); }
   font-size: 13px;
   color: var(--text-faint);
   margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .pp-onair-wrap {
   margin-top: 10px;
@@ -704,6 +711,12 @@ input::placeholder { color: var(--text-ghost); }
   margin-top: 4px;
   font-size: 11px;
   color: var(--text-faint);
+}
+.db-meta-artist {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0; /* allow this flex item to shrink below its content size */
 }
 .db-controls {
   flex: 1;
@@ -952,9 +965,13 @@ input::placeholder { color: var(--text-ghost); }
 .bulk-import-title {
   font-size: 13px;
   color: var(--text);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.35;
+  word-break: break-word;
 }
 .bulk-import-artist {
   font-size: 11px;
@@ -1551,4 +1568,43 @@ input::placeholder { color: var(--text-ghost); }
   width: 1em;
   height: 1em;
   vertical-align: text-bottom;
+}
+
+/* ════════════════════════════════════════════════════════
+   Marquee — temporary scrolling reveal for long "now playing"
+   title/artist text (player panel, bottom bar, mobile minibar).
+
+   Applied via JS (see applyMarqueeIfNeeded in app.js) ONLY when the
+   text actually overflows its container. Runs a limited number of
+   passes, then settles back to the element's normal static
+   white-space:nowrap + text-overflow:ellipsis truncation — so most
+   of the time (short titles, or once a long one has already been
+   read once) this is invisible and behaves exactly like plain
+   ellipsis truncation.
+════════════════════════════════════════════════════════ */
+.marquee-active {
+  text-overflow: clip;   /* the inner span's edges become the visible cutoff */
+  text-align: left;      /* always scroll starting flush-left, even inside
+                             center-aligned containers like .pp-track-title */
+}
+.marquee-inner {
+  display: inline-block;
+  will-change: transform;
+  animation-name: marquee-scroll;
+  animation-duration: var(--marquee-duration, 8s);
+  animation-timing-function: ease-in-out;
+  animation-delay: 0.6s;
+  animation-fill-mode: both;
+}
+@keyframes marquee-scroll {
+  0%, 10%   { transform: translateX(0); }
+  45%, 55%  { transform: translateX(var(--marquee-distance, 0px)); }
+  90%, 100% { transform: translateX(0); }
+}
+
+/* Respect reduced-motion preference: never animate, stay on plain
+   ellipsis truncation. (JS also checks this before ever activating
+   the marquee, so this is a defense-in-depth fallback.) */
+@media (prefers-reduced-motion: reduce) {
+  .marquee-inner { animation: none !important; }
 }
