@@ -167,7 +167,8 @@ function iconMarkup(name, cls = "icon") {
 
       // Scale duration with distance so long titles scroll at a roughly
       // consistent reading speed rather than all taking the same time.
-      const duration = Math.min(14, Math.max(5, overflowPx / 28));
+      // Divisor tuned for a leisurely, easy-to-read pace.
+      const duration = Math.min(20, Math.max(7, overflowPx / 34));
       el.style.setProperty("--marquee-distance", `-${overflowPx}px`);
       el.style.setProperty("--marquee-duration", `${duration}s`);
       inner.style.animationIterationCount = String(MARQUEE_ITERATIONS);
