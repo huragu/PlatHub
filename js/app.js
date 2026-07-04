@@ -140,7 +140,12 @@ function iconMarkup(name, cls = "icon") {
     el.textContent = text;
     if (!text) return;
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    // Respect the OS/browser's reduced-motion signal by default (protects
+    // people who could be genuinely bothered by scrolling text). The
+    // in-app "長い曲名・アーティスト名をスクロール表示" setting is an
+    // explicit, informed opt-in that overrides this for people who want
+    // the animation despite their OS-level default.
+    if (!appSettings.force_marquee && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     requestAnimationFrame(() => {
       if (el.dataset.marqueeKey !== key) return; // superseded by a newer change
@@ -1736,6 +1741,7 @@ function iconMarkup(name, cls = "icon") {
       appSettings = prefs;
       Settings.save(prefs);
       applyPlatformVolumes();
+      invalidateMarqueeCaches();
     });
   }
 
@@ -1749,6 +1755,7 @@ function iconMarkup(name, cls = "icon") {
       appSettings = prefs;
       Settings.save(prefs);
       applyPlatformVolumes();
+      invalidateMarqueeCaches();
     };
     // Desktop drawer
     if (settingsContentDesktop && !settingsPanel.hidden) {
@@ -1771,6 +1778,26 @@ function iconMarkup(name, cls = "icon") {
     if (SpotifyEngine.isReady) {
       SpotifyEngine.setVolume(Math.min(1, masterVol * (appSettings.vol_spotify ?? 1)));
     }
+  }
+
+  /**
+   * Clears the cached "already checked" marquee state on all now-playing
+   * title/artist display elements. Needed after a settings change that
+   * could affect whether a marquee SHOULD be active (currently: the
+   * "force_marquee" override) — otherwise applyMarqueeIfNeeded's cache
+   * (keyed on text+width) would keep skipping re-evaluation since neither
+   * the text nor the element width actually changed.
+   */
+  function invalidateMarqueeCaches() {
+    const els = [dbTitle, dbMetaArtistEl, miniBarTitle];
+    if (ppDesktop) els.push(ppDesktop.titleEl, ppDesktop.artistEl);
+    if (ppMobile) els.push(ppMobile.titleEl, ppMobile.artistEl);
+    els.forEach((el) => {
+      if (!el) return;
+      delete el.dataset.marqueeKey;
+      delete el.dataset.marqueeText;
+    });
+    renderAll();
   }
 
   /* ════════════════════════════════════════════

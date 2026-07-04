@@ -24,6 +24,7 @@ const Settings = (() => {
     radio_shuffle_on_start: false,
     auto_update_check:    true,   // 起動時に自動でインポート元の新着をチェックする
     confirm_track_delete: false,  // トラック削除ボタンに確認ダイアログを挟む
+    force_marquee:        false,  // OSの「視差効果を減らす」設定を無視してスクロール表示を使う
     yt_worker_url:        "",     // Cloudflare Worker URL for YouTube playlist/channel fetch
   };
 
@@ -181,6 +182,15 @@ const Settings = (() => {
         onPrefsChange(prefs);
       }),
       "トラックの✕ボタンを押したときに確認ダイアログを表示する（誤操作防止）"
+    ));
+
+    behaviorSection.appendChild(row(
+      "長い曲名・アーティスト名をスクロール表示",
+      toggle("force_marquee", prefs.force_marquee, v => {
+        prefs.force_marquee = v;
+        onPrefsChange(prefs);
+      }),
+      "枠に収まらない曲名・アーティスト名を一時的に左右スクロールして全文表示する。お使いの端末で「視差効果を減らす」設定が有効な場合、通常はこの機能を自動的に無効化しますが、ここをオンにすると設定を上書きして使用します。"
     ));
 
     container.appendChild(behaviorSection);

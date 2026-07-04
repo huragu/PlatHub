@@ -1602,9 +1602,9 @@ input::placeholder { color: var(--text-ghost); }
   90%, 100% { transform: translateX(0); }
 }
 
-/* Respect reduced-motion preference: never animate, stay on plain
-   ellipsis truncation. (JS also checks this before ever activating
-   the marquee, so this is a defense-in-depth fallback.) */
-@media (prefers-reduced-motion: reduce) {
-  .marquee-inner { animation: none !important; }
-}
+/* Reduced-motion handling lives in JS (applyMarqueeIfNeeded in app.js):
+   the marquee is skipped by default when the OS/browser signals
+   prefers-reduced-motion, UNLESS the person has explicitly opted in via
+   the "長い曲名・アーティスト名をスクロール表示" setting. A blanket CSS
+   override here would defeat that opt-in, so it's intentionally NOT
+   duplicated at the CSS level. */
