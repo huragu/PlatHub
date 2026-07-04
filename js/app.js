@@ -83,16 +83,16 @@ function iconMarkup(name, cls = "icon") {
   /**
    * Applies a temporary scrolling "marquee" reveal to a now-playing title/
    * artist element, but ONLY when its text actually overflows the element's
-   * width. Runs a limited number of passes (MARQUEE_ITERATIONS), then
-   * settles back to the element's normal static ellipsis-truncated display
-   * — so this never loops forever, and short text that already fits is
-   * completely unaffected (no DOM restructuring happens at all in that case).
+   * width. Loops continuously for as long as the same overflowing text is
+   * displayed — short text that already fits is completely unaffected
+   * (no DOM restructuring happens at all in that case).
    *
    * Safe to call on every render, including from code that runs on a
    * polling timer (e.g. the position-update tick): it no-ops immediately
    * if `text` is unchanged from the last call for this element, so it
-   * never restarts an in-progress or already-finished marquee for the
-   * same title. Skips animation entirely for prefers-reduced-motion users.
+   * never restarts an in-progress marquee for the same title. Skips
+   * animation entirely for prefers-reduced-motion users (unless the
+   * force_marquee setting explicitly overrides that).
    *
    * Hidden-element safe: if the element is currently invisible (e.g. an
    * inactive mobile tab, or a panel not yet mounted into visible layout),
@@ -107,7 +107,6 @@ function iconMarkup(name, cls = "icon") {
    *   white-space:nowrap in its base CSS — used as-is when not overflowing)
    * @param {string} text
    */
-  const MARQUEE_ITERATIONS = 3;
   function isMeasurable(el) {
     return el.offsetParent !== null && el.clientWidth > 0;
   }
@@ -119,7 +118,6 @@ function iconMarkup(name, cls = "icon") {
       // Can't reliably measure while hidden — show plain text but leave
       // dataset.marqueeKey UNSET so a future call (once visible) retries.
       if (el.dataset.marqueeText === text) return; // already showing this, nothing to do
-      if (el._marqueeCleanup) { el._marqueeCleanup(); el._marqueeCleanup = null; }
       el.classList.remove("marquee-active");
       el.textContent = text;
       el.dataset.marqueeText = text;
@@ -135,7 +133,6 @@ function iconMarkup(name, cls = "icon") {
     el.dataset.marqueeKey = key;
 
     el.dataset.marqueeText = text;
-    if (el._marqueeCleanup) { el._marqueeCleanup(); el._marqueeCleanup = null; }
     el.classList.remove("marquee-active");
     el.textContent = text;
     if (!text) return;
@@ -171,16 +168,7 @@ function iconMarkup(name, cls = "icon") {
       const duration = Math.min(20, Math.max(7, overflowPx / 34));
       el.style.setProperty("--marquee-distance", `-${overflowPx}px`);
       el.style.setProperty("--marquee-duration", `${duration}s`);
-      inner.style.animationIterationCount = String(MARQUEE_ITERATIONS);
-
-      const onEnd = () => {
-        inner.removeEventListener("animationend", onEnd);
-        if (el.dataset.marqueeKey !== key) return; // superseded meanwhile
-        el.classList.remove("marquee-active");
-        el.textContent = text;
-      };
-      inner.addEventListener("animationend", onEnd);
-      el._marqueeCleanup = () => inner.removeEventListener("animationend", onEnd);
+      inner.style.animationIterationCount = "infinite";
     });
   }
 
