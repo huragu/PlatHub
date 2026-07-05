@@ -94,15 +94,29 @@
 
   window.onYouTubeIframeAPIReady = () => {
     if (!videoId) return;
-    player = new YT.Player("playerHost", {
-      videoId,
-      playerVars: {
-        autoplay: 1,
-        controls: 1,       // native YouTube controls — this window has no custom UI of its own
-        rel: 0,
-        playsinline: 1,
-        origin: window.location.origin,
-      },
+
+    // Build the <iframe> ourselves (with referrerpolicy/allow set before
+    // insertion) rather than letting YT.Player create it — attributes set
+    // AFTER the player is ready are too late, since the initial embed
+    // request has already gone out by then.
+    const params = new URLSearchParams({
+      enablejsapi: "1",
+      autoplay: "1",
+      controls: "1",
+      rel: "0",
+      playsinline: "1",
+      origin: window.location.origin,
+    });
+    const iframeEl = document.createElement("iframe");
+    iframeEl.src = `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+    iframeEl.width = "100%";
+    iframeEl.height = "100%";
+    iframeEl.frameBorder = "0";
+    iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+    iframeEl.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
+    document.getElementById("playerHost").appendChild(iframeEl);
+
+    player = new YT.Player(iframeEl, {
       events: {
         onReady(e) {
           ready = true;
@@ -111,13 +125,6 @@
             try { e.target.seekTo(startSeconds, true); } catch (_) {}
           }
           try { e.target.playVideo(); } catch (_) {}
-          try {
-            const iframeEl = e.target.getIframe?.();
-            if (iframeEl) {
-              iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
-              iframeEl.referrerPolicy = "strict-origin-when-cross-origin";
-            }
-          } catch (_) {}
           statusEl.textContent = "このウィンドウを開いたままにしてください。閉じるとメイン画面に戻ります。";
           post("ready", {});
         },

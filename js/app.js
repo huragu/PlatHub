@@ -848,32 +848,42 @@ function iconMarkup(name, cls = "icon") {
       #pipHost iframe { width:100%; height:100%; border:none; }
     `;
     pipWindow.document.head.appendChild(style);
+
     const hostDiv = pipWindow.document.createElement("div");
     hostDiv.id = "pipHost";
     pipWindow.document.body.appendChild(hostDiv);
+
+    // Build the <iframe> ourselves (with referrerpolicy/allow set before
+    // insertion) rather than letting YT.Player create it — same reasoning
+    // as youtube-engine.js: attributes set AFTER the player is ready are
+    // too late, since the initial embed request has already gone out.
+    const params = new URLSearchParams({
+      enablejsapi: "1",
+      autoplay: "1",
+      controls: "1",
+      rel: "0",
+      playsinline: "1",
+      origin: pipWindow.location.origin,
+    });
+    const iframeEl = pipWindow.document.createElement("iframe");
+    iframeEl.src = `https://www.youtube.com/embed/${t.sourceId}?${params.toString()}`;
+    iframeEl.width = "100%";
+    iframeEl.height = "100%";
+    iframeEl.frameBorder = "0";
+    iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+    iframeEl.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
+    hostDiv.appendChild(iframeEl);
 
     // Load a FRESH copy of the YouTube IFrame API inside the PiP window's
     // own document, so it gets its own independent `YT` global bound to
     // that window — avoids any cross-window API-object ambiguity.
     pipWindow.onYouTubeIframeAPIReady = () => {
-      new pipWindow.YT.Player("pipHost", {
-        videoId: t.sourceId,
-        playerVars: {
-          autoplay: 1, controls: 1, rel: 0, playsinline: 1,
-          origin: pipWindow.location.origin,
-        },
+      new pipWindow.YT.Player(iframeEl, {
         events: {
           onReady(e) {
             try { e.target.setVolume(Math.round(volYT * 100)); } catch (_) {}
             if (startPosition > 0) { try { e.target.seekTo(startPosition, true); } catch (_) {} }
             try { e.target.playVideo(); } catch (_) {}
-            try {
-              const iframeEl = e.target.getIframe?.();
-              if (iframeEl) {
-                iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
-                iframeEl.referrerPolicy = "strict-origin-when-cross-origin";
-              }
-            } catch (_) {}
           },
           onStateChange(e) {
             if (e.data === pipWindow.YT.PlayerState.ENDED) {

@@ -39,36 +39,37 @@ const YouTubeEngine = (() => {
     destroy();
 
     waitForApi(() => {
-      player = new window.YT.Player(el, {
-        videoId,
-        playerVars: {
-          autoplay: autoplay ? 1 : 0,
-          controls: 0,
-          rel: 0,
-          modestbranding: 1,
-          playsinline: 1,
-          origin: window.location.origin,
-        },
+      // Build the <iframe> ourselves, with referrerpolicy/allow set BEFORE
+      // it's ever inserted into the DOM — setting these attributes AFTER
+      // the player is ready is too late, since the initial embed request
+      // (the one that can trigger YouTube's "Error 153: missing Referer")
+      // has already gone out by then. Player parameters that would
+      // normally go in playerVars are instead baked directly into the
+      // src URL, per YouTube's documented "existing iframe" usage pattern.
+      const params = new URLSearchParams({
+        enablejsapi: "1",
+        autoplay: autoplay ? "1" : "0",
+        controls: "0",
+        rel: "0",
+        modestbranding: "1",
+        playsinline: "1",
+        origin: window.location.origin,
+      });
+      const iframeEl = document.createElement("iframe");
+      iframeEl.src = `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+      iframeEl.width = "100%";
+      iframeEl.height = "100%";
+      iframeEl.frameBorder = "0";
+      iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+      iframeEl.referrerPolicy = "strict-origin-when-cross-origin";
+      el.innerHTML = "";
+      el.appendChild(iframeEl);
+
+      player = new window.YT.Player(iframeEl, {
         events: {
           onReady(e) {
             ready = true;
             try { e.target.setVolume(Math.round(volume * 100)); } catch (_) {}
-            // Explicitly grant the Permissions Policy YouTube's cross-origin
-            // iframe needs to autoplay/resume without being blocked by the
-            // browser. YT.Player doesn't reliably set this itself, and its
-            // absence is a documented cause of blocked programmatic play()
-            // calls on cross-origin iframes (e.g. resuming after the tab
-            // was backgrounded, or auto-advancing to the next track).
-            try {
-              const iframeEl = e.target.getIframe?.();
-              if (iframeEl) {
-                iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
-                // Extra safeguard against YouTube's "Error 153" (missing
-                // Referer header) — belt-and-suspenders alongside the
-                // document-level <meta name="referrer"> tag.
-                iframeEl.referrerPolicy = "strict-origin-when-cross-origin";
-              }
-            } catch (_) {}
             if (pendingPlayState) {
               try { e.target.playVideo(); } catch (_) {}
             }
