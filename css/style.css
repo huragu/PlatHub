@@ -861,6 +861,53 @@ input::placeholder { color: var(--text-ghost); }
   .mobile-playlists-view[hidden] { display: none; }
   .mobile-player-view[hidden] { display: none; }
 
+  /* ── Mini floating video ──
+     When a YouTube track is playing and the user switches to a DIFFERENT
+     mobile tab (トラック/リスト/設定), instead of fully hiding the player
+     view (which would remove the video from the render tree and could
+     make YouTube's own script treat it as "not visible"), this class
+     keeps it rendered but repositions it as a small fixed corner box.
+     The iframe itself NEVER moves in the DOM — only CSS position/size
+     change — so it never reloads. */
+  .mobile-player-view[hidden].mini-video-float {
+    display: block !important;
+    position: fixed;
+    bottom: 66px;   /* sit just above the tab bar */
+    right: 10px;
+    width: 148px;
+    height: 84px;
+    z-index: 500;
+    pointer-events: none; /* let taps reach the tab underneath, except the video itself */
+  }
+  .mini-video-float #playerPanelContentMobile > *:not(.pp-youtube-wrap) {
+    display: none;
+  }
+  .mini-video-float #playerPanelContentMobile {
+    padding: 0;
+    margin: 0;
+    gap: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    display: block;
+  }
+  .mini-video-float .pp-youtube-wrap {
+    pointer-events: auto;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    cursor: pointer;
+    border-radius: 10px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  }
+  .mini-video-float .pp-youtube-host {
+    height: 100%;
+    max-height: none;
+    aspect-ratio: unset;
+    border-radius: 10px;
+  }
+  .mini-video-float .pp-popout-btn { display: none; } /* too cramped in the mini box */
+
   .mobile-playlists-view:not([hidden]) {
     flex: 1;
     overflow-y: auto;

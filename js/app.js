@@ -702,14 +702,24 @@ function iconMarkup(name, cls = "icon") {
      Tab visibility change handling
      ─────────────────────────────────────────
      Problem: when the user switches away from the tab, two things happen:
-       1. YouTube's IFrame API auto-pauses (YouTube's own policy).
+       1. YouTube's IFrame API auto-pauses. Community reports (e.g.
+          https://github.com/katzer/cordova-plugin-background-mode/issues/562)
+          indicate this is a Chromium ENGINE-level background-media policy
+          for iframed video specifically — not something either PlatHub or
+          YouTube's own script can override via JavaScript. Reportedly,
+          Firefox/Gecko browsers and Samsung Internet do not enforce this
+          the same way, so background continuation may already work there
+          without any special handling.
        2. When a track ends and the next track's play() is called while
           backgrounded, the browser may reject it with NotAllowedError
           (browser autoplay policy on background tabs).
 
      Solution:
-       - When the tab becomes HIDDEN: note that we were "playing" and
-         which engine/track was active (YouTube needs special handling).
+       - When the tab becomes HIDDEN: note that we were "playing", and (for
+         YouTube specifically) start a periodic "nudge" that keeps calling
+         play() once a second. This is a best-effort measure based on a
+         community report of partial success — it's a harmless no-op if
+         the engine ignores it, but costs nothing to try.
        - When the tab becomes VISIBLE again: if we were playing before
          hiding, resume playback. This works because the visibilitychange
          event fires as a direct result of the user's tab-switch gesture,
@@ -720,6 +730,20 @@ function iconMarkup(name, cls = "icon") {
   ════════════════════════════════════════════ */
   let wasPlayingBeforeHide = false;
   let pendingNextTrack = null;   // set when next-track play() was rejected while backgrounded
+  let backgroundNudgeTimer = null;
+
+  function startBackgroundNudge() {
+    stopBackgroundNudge();
+    backgroundNudgeTimer = setInterval(() => {
+      if (!document.hidden) { stopBackgroundNudge(); return; }
+      if (activeEngine() === "youtube" && playing) {
+        try { YouTubeEngine.play(); } catch (_) {}
+      }
+    }, 1000);
+  }
+  function stopBackgroundNudge() {
+    if (backgroundNudgeTimer) { clearInterval(backgroundNudgeTimer); backgroundNudgeTimer = null; }
+  }
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
@@ -727,8 +751,10 @@ function iconMarkup(name, cls = "icon") {
       // Always capture the playing state — we need it on return
       // because YouTube will auto-pause itself while backgrounded.
       wasPlayingBeforeHide = playing;
+      if (activeEngine() === "youtube" && playing) startBackgroundNudge();
     } else {
       // Tab returning to foreground.
+      stopBackgroundNudge();
       if (wasPlayingBeforeHide) {
         // If there's a queued next-track that couldn't start while
         // backgrounded, play it now (this counts as a user gesture).
@@ -803,11 +829,20 @@ function iconMarkup(name, cls = "icon") {
     const t = getCurrentTrack();
     if (!t || t.service !== "youtube") return;
 
-    if ("documentPictureInPicture" in window) {
-      openYoutubePip(t);
-    } else {
-      openYoutubePopupWindow(t);
-    }
+    // NOTE: Document Picture-in-Picture is NOT used here, even though the
+    // infrastructure for it exists below (openYoutubePip). Testing showed
+    // it's architecturally incompatible with YouTube embeds specifically:
+    // YouTube now requires a Referer header to identify the embedding page
+    // (see https://developers.google.com/youtube/terms/required-minimum-functionality),
+    // but a Document PiP window's document can never be navigated (per
+    // spec) — it stays at about:blank forever — so there is no real
+    // referring URL for the browser to derive a Referer from, no matter
+    // what origin/referrerpolicy values are set on the embedded iframe.
+    // This surfaces as YouTube's "Error 153: Video player configuration
+    // error" every time, regardless of environment. The popup window path
+    // below performs a real navigation and has a valid origin, so it
+    // doesn't hit this problem.
+    openYoutubePopupWindow(t);
   }
 
   function closeActivePopout() {
@@ -1969,6 +2004,16 @@ function iconMarkup(name, cls = "icon") {
     mobileSettingsView.hidden = tab !== "settings";
     miniBar.hidden = !getCurrentTrack() || tab === "player" || tab === "settings";
 
+    // Keep a YouTube video visible as a small floating box (instead of
+    // fully hidden) when browsing a different mobile tab — see the CSS
+    // comment on .mini-video-float for why this never moves the iframe.
+    const t = getCurrentTrack();
+    const showMiniVideo = tab !== "player" && t?.service === "youtube";
+    mobilePlayerView.classList.toggle("mini-video-float", showMiniVideo);
+    // The mini box overlaps the minibar's usual spot — hide the minibar
+    // while the floating video is showing so they don't visually collide.
+    if (showMiniVideo) miniBar.hidden = true;
+
     if (tab === "player") {
       ensureMobilePanelMounted();
       renderPlayerPanels();
@@ -2369,6 +2414,15 @@ function iconMarkup(name, cls = "icon") {
     wireSeekableTrack(pp.progressTrack, () => duration, seekTo);
     PlayerPanel.buildWaveform(pp.waveformEl);
     if (pp.popoutBtn) pp.popoutBtn.addEventListener("click", toggleYoutubePopout);
+
+    // Tapping the mini floating video (mobile, non-player tab) jumps back
+    // to the full player view. No-op on desktop or when already on the
+    // player tab, since there's no float mode to "expand" from there.
+    if (pp.ytWrap) {
+      pp.ytWrap.addEventListener("click", () => {
+        if (pp === ppMobile && mobileTab !== "player") setMobileTab("player");
+      });
+    }
   }
 
   function renderPlayerPanels() {
@@ -2412,12 +2466,14 @@ function iconMarkup(name, cls = "icon") {
   function getVisibleYtHost() {
     if (isMobile()) {
       ensureMobilePanelMounted();
-      // On mobile, prefer the player tab's host so the user can see the video.
-      // But if they're on another tab, fall back to the desktop panel's hidden
-      // host so the iframe stays alive and ENDED events keep firing.
-      if (mobileTab === "player") return ppMobile.ytHost;
-      ensureDesktopPanelMounted();
-      return ppDesktop.ytHost; // keeps iframe alive in background
+      // The mobile panel's video is now ALWAYS visually rendered when a
+      // YouTube track is active — full-size on the "player" tab, or as a
+      // small floating box (.mini-video-float, see CSS) on any other tab.
+      // It's never truly display:none anymore, so there's no need to fall
+      // back to the desktop panel's hidden host to "keep the iframe alive"
+      // — and using the mobile host here ensures the floating box actually
+      // shows the playing video, instead of an empty/stale element.
+      return ppMobile.ytHost;
     }
     ensureDesktopPanelMounted();
     return ppDesktop.ytHost;
@@ -2476,8 +2532,10 @@ function iconMarkup(name, cls = "icon") {
       if (t.artist) applyMarqueeIfNeeded(dbMetaArtistEl, t.artist);
     }
 
-    // Mobile minibar
-    miniBar.hidden = !t || (isMobile() && mobileTab === "player");
+    // Mobile minibar — also stays hidden while the floating mini-video is
+    // showing (it would otherwise visually overlap the same corner area).
+    const isFloatingVideo = mobilePlayerView.classList.contains("mini-video-float");
+    miniBar.hidden = !t || (isMobile() && mobileTab === "player") || isFloatingVideo;
     if (t) {
       applyMarqueeIfNeeded(miniBarTitle, t.title);
       miniBarProgressFill.style.width = `${pct}%`;
