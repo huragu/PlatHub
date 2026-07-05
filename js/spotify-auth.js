@@ -20,7 +20,7 @@ const SpotifyAuth = (() => {
   // ── Client ID ────────────────────────────────────────
   // ベータ公開前に、ここにご自身の Spotify Client ID を貼り付けてください。
   // 一般ユーザーはこの値を自動的に使うため、個別設定は不要になります。
-  const HARDCODED_CLIENT_ID = "YOUR_SPOTIFY_CLIENT_ID_HERE";
+  const HARDCODED_CLIENT_ID = "7e48ee5d5db74137bb3398ae8653bd7d";
 
   const CLIENT_ID_KEY  = "mixcast_spotify_client_id";
   const STORAGE_KEY    = "mixcast_spotify_tokens_v1";
