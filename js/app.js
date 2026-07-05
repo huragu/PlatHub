@@ -2444,6 +2444,7 @@ function iconMarkup(name, cls = "icon") {
 
     pp.ytWrap.hidden = !(t && t.service === "youtube");
     pp.waveformEl.hidden = !(t && t.service === "direct_audio");
+    if (pp.pipHintEl) pp.pipHintEl.hidden = !(t && t.service === "youtube");
 
     pp.badgeRow.innerHTML = "";
     if (t) pp.badgeRow.appendChild(Services.badgeEl(t.service));

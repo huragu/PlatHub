@@ -644,6 +644,23 @@ input::placeholder { color: var(--text-ghost); }
   color: var(--red);
 }
 
+.pp-pip-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  max-width: 480px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  padding: 2px 4px 0;
+}
+.pp-pip-hint .icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #666;
+}
+
 .pp-info { text-align: center; width: 100%; }
 .pp-badge-row { display: flex; justify-content: center; margin-bottom: 8px; min-height: 18px; }
 .pp-track-title {

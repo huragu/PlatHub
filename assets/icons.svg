@@ -167,4 +167,10 @@
     <path d="M20 4 11 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
   </symbol>
 
+  <symbol id="icon-info" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <path d="M12 11v5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    <circle cx="12" cy="7.7" r="1.05" fill="currentColor"/>
+  </symbol>
+
 </svg>
