@@ -863,7 +863,14 @@ function iconMarkup(name, cls = "icon") {
       controls: "1",
       rel: "0",
       playsinline: "1",
-      origin: pipWindow.location.origin,
+      // NOTE: pipWindow.location.origin is unreliable here — the PiP
+      // window is an about:blank document populated via direct DOM
+      // injection (never actually navigated; the spec explicitly says
+      // Document PiP windows "cannot be navigated"), so its own origin
+      // serializes to the string "null". Use the REAL opener page's
+      // origin instead, since that's PlatHub's actual, valid origin —
+      // passing origin=null was almost certainly the cause of Error 153.
+      origin: window.location.origin,
     });
     const iframeEl = pipWindow.document.createElement("iframe");
     iframeEl.src = `https://www.youtube.com/embed/${t.sourceId}?${params.toString()}`;
