@@ -830,6 +830,16 @@ function iconMarkup(name, cls = "icon") {
       return;
     }
 
+    // YouTube's embed requires a Referer header to identify the embedding
+    // page (missing it causes "Error 153: embedder.identity.missing.referrer").
+    // Since this window is populated via direct DOM injection rather than a
+    // normal navigation, its default referrer behavior isn't guaranteed —
+    // set an explicit policy up front, before anything else loads.
+    const referrerMeta = pipWindow.document.createElement("meta");
+    referrerMeta.name = "referrer";
+    referrerMeta.content = "strict-origin-when-cross-origin";
+    pipWindow.document.head.appendChild(referrerMeta);
+
     const style = pipWindow.document.createElement("style");
     style.textContent = `
       * { margin:0; padding:0; box-sizing:border-box; }
@@ -848,12 +858,22 @@ function iconMarkup(name, cls = "icon") {
     pipWindow.onYouTubeIframeAPIReady = () => {
       new pipWindow.YT.Player("pipHost", {
         videoId: t.sourceId,
-        playerVars: { autoplay: 1, controls: 1, rel: 0, playsinline: 1 },
+        playerVars: {
+          autoplay: 1, controls: 1, rel: 0, playsinline: 1,
+          origin: pipWindow.location.origin,
+        },
         events: {
           onReady(e) {
             try { e.target.setVolume(Math.round(volYT * 100)); } catch (_) {}
             if (startPosition > 0) { try { e.target.seekTo(startPosition, true); } catch (_) {} }
             try { e.target.playVideo(); } catch (_) {}
+            try {
+              const iframeEl = e.target.getIframe?.();
+              if (iframeEl) {
+                iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+                iframeEl.referrerPolicy = "strict-origin-when-cross-origin";
+              }
+            } catch (_) {}
           },
           onStateChange(e) {
             if (e.data === pipWindow.YT.PlayerState.ENDED) {

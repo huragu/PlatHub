@@ -61,7 +61,13 @@ const YouTubeEngine = (() => {
             // was backgrounded, or auto-advancing to the next track).
             try {
               const iframeEl = e.target.getIframe?.();
-              if (iframeEl) iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+              if (iframeEl) {
+                iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+                // Extra safeguard against YouTube's "Error 153" (missing
+                // Referer header) — belt-and-suspenders alongside the
+                // document-level <meta name="referrer"> tag.
+                iframeEl.referrerPolicy = "strict-origin-when-cross-origin";
+              }
             } catch (_) {}
             if (pendingPlayState) {
               try { e.target.playVideo(); } catch (_) {}

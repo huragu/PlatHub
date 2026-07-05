@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PlatHub — ポップアウト</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -110,6 +111,13 @@
             try { e.target.seekTo(startSeconds, true); } catch (_) {}
           }
           try { e.target.playVideo(); } catch (_) {}
+          try {
+            const iframeEl = e.target.getIframe?.();
+            if (iframeEl) {
+              iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+              iframeEl.referrerPolicy = "strict-origin-when-cross-origin";
+            }
+          } catch (_) {}
           statusEl.textContent = "このウィンドウを開いたままにしてください。閉じるとメイン画面に戻ります。";
           post("ready", {});
         },
