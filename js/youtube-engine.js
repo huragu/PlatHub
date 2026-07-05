@@ -53,6 +53,16 @@ const YouTubeEngine = (() => {
           onReady(e) {
             ready = true;
             try { e.target.setVolume(Math.round(volume * 100)); } catch (_) {}
+            // Explicitly grant the Permissions Policy YouTube's cross-origin
+            // iframe needs to autoplay/resume without being blocked by the
+            // browser. YT.Player doesn't reliably set this itself, and its
+            // absence is a documented cause of blocked programmatic play()
+            // calls on cross-origin iframes (e.g. resuming after the tab
+            // was backgrounded, or auto-advancing to the next track).
+            try {
+              const iframeEl = e.target.getIframe?.();
+              if (iframeEl) iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
+            } catch (_) {}
             if (pendingPlayState) {
               try { e.target.playVideo(); } catch (_) {}
             }
