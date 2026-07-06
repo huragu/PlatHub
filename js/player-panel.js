@@ -27,6 +27,7 @@ const PlayerPanel = (() => {
       ytHost: root.querySelector(".pp-youtube-host"),
       popoutBtn: root.querySelector(".pp-popout-btn"),
       pipHintEl: root.querySelector(".pp-pip-hint"),
+      popoutActiveNote: root.querySelector(".pp-popout-active-note"),
       badgeRow: root.querySelector(".pp-badge-row"),
       titleEl: root.querySelector(".pp-track-title"),
       artistEl: root.querySelector(".pp-track-artist"),

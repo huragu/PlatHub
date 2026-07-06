@@ -661,6 +661,28 @@ input::placeholder { color: var(--text-ghost); }
   color: #666;
 }
 
+.pp-popout-active-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 16/9;
+  max-height: 190px;
+  border-radius: 10px;
+  border: 1px dashed #2a2a3a;
+  color: var(--text-faint);
+  font-size: 13px;
+  background: rgba(233, 69, 96, 0.04);
+}
+.pp-popout-active-note .icon { color: var(--red); }
+
+.transport-inert {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 .pp-info { text-align: center; width: 100%; }
 .pp-badge-row { display: flex; justify-content: center; margin-bottom: 8px; min-height: 18px; }
 .pp-track-title {

@@ -409,7 +409,7 @@ function iconMarkup(name, cls = "icon") {
     clearInterval(ytPollTimer);
     ytPollTimer = setInterval(() => {
       const engine = activeEngine();
-      if (engine === "youtube" && playing) {
+      if (engine === "youtube" && playing && !popoutActive) {
         position = YouTubeEngine.getCurrentTime();
         duration = YouTubeEngine.getDuration() || duration;
         renderTransport();
@@ -961,11 +961,12 @@ function iconMarkup(name, cls = "icon") {
       t: String(Math.floor(position)),
       vol: String(volYT),
       title: t.title || "",
+      artist: t.artist || "",
     });
     const popup = window.open(
       `popout.html?${params.toString()}`,
       "plathub_popout",
-      "width=480,height=310,popup=1"
+      "width=320,height=340,popup=1"
     );
     if (!popup) {
       showToast("ポップアウトウィンドウを開けませんでした（ポップアップブロックの可能性があります）", { duration: 5000, icon: "warning" });
@@ -992,6 +993,7 @@ function iconMarkup(name, cls = "icon") {
     YouTubeEngine.pause();
     playing = false;
     renderTransport();
+    renderPlayerPanels();  // hides the video area, shows the "playing elsewhere" note, dims transport
     renderPlaybackModeUI();
     updateMediaSessionPlaybackState();
     renderPopoutButtonState();
@@ -1006,6 +1008,7 @@ function iconMarkup(name, cls = "icon") {
       position = finalPosition;
       try { YouTubeEngine.seekTo(finalPosition); } catch (_) {}
     }
+    renderPlayerPanels();  // restores the video area, hides the "playing elsewhere" note
     renderPopoutButtonState();
     showToast("ポップアウトを終了しました。メイン画面から再生を続けられます。");
   }
@@ -1050,6 +1053,7 @@ function iconMarkup(name, cls = "icon") {
           videoId: track.sourceId,
           volume: volYT,
           title: track.title,
+          artist: track.artist || "",
         }, window.location.origin);
       } catch (_) {}
     }
@@ -1091,10 +1095,51 @@ function iconMarkup(name, cls = "icon") {
         closeActivePopout();
         playTrack(next, { syncView: false });
       }
+    } else if (data.type === "requestNext") {
+      // User pressed Next inside the popout — same lookup as skipNext().
+      const next = nextTrack(true);
+      if (!next) return;
+      if (next.service === "youtube") {
+        advancePopoutToTrack(next);
+      } else {
+        closeActivePopout();
+        playTrack(next, { syncView: false });
+      }
+    } else if (data.type === "requestPrev") {
+      // User pressed Prev inside the popout — same "restart if far into
+      // the track, else go to the actual previous track" as skipPrev().
+      if (typeof data.position === "number" && data.position > 3) {
+        if (popoutWindowRef && !popoutWindowRef.closed) {
+          try {
+            popoutWindowRef.postMessage({ source: "plathub-main", type: "seekLocal" }, window.location.origin);
+          } catch (_) {}
+        }
+        position = 0;
+        renderTransport();
+        return;
+      }
+      const prev = computePrevTrack();
+      if (!prev) return;
+      if (prev.service === "youtube") {
+        advancePopoutToTrack(prev);
+      } else {
+        closeActivePopout();
+        playTrack(prev, { syncView: false });
+      }
+    } else if (data.type === "position") {
+      // Keep the main window's (visually inert, but still informative)
+      // progress bar and play-state in sync with what's actually
+      // audible in the popout.
+      if (popoutActive) {
+        position = data.position || 0;
+        duration = data.duration || 0;
+        playing = !!data.playing;
+        renderTransport();
+      }
     } else if (data.type === "error") {
       showToast(`ポップアウト側で再生エラーが発生しました（コード ${data.code}）`, { duration: 5000, icon: "warning" });
     }
-    // 'position'/'ready' messages are informational only for now.
+    // 'ready' is informational only.
   });
 
   /* ════════════════════════════════════════════
@@ -1177,6 +1222,10 @@ function iconMarkup(name, cls = "icon") {
 
   function togglePlayPause() {
     if (!getCurrentTrack()) return;
+    // While a popout is actively playing YouTube, it has its own
+    // play/pause button — the main window's button is inert to avoid
+    // double-controlling the (paused, hidden) main-window iframe.
+    if (popoutActive && activeEngine() === "youtube") return;
     playing = !playing;
     const engine = activeEngine();
     if (engine === "youtube") {
@@ -1257,18 +1306,24 @@ function iconMarkup(name, cls = "icon") {
     return null;
   }
 
-  function skipPrev() {
-    if (position > 3) { seekTo(0); return; }
+  /** Shared "what's the previous track" lookup (shuffle-aware), used by
+   *  both skipPrev() and the popout's requestPrev handler. Does NOT
+   *  handle the "restart if position > 3s" case — callers check that first. */
+  function computePrevTrack() {
     const tracks = getTracks();
     if (shuffleMode && shuffleQueue.length) {
       const ci = shuffleQueue.indexOf(currentTrackId);
       const pi = (ci - 1 + shuffleQueue.length) % shuffleQueue.length;
-      const prev = tracks.find((t) => t.id === shuffleQueue[pi]);
-      if (prev) playTrack(prev, { syncView: true });
-    } else {
-      const idx = getCurrentIndex();
-      if (idx > 0) playTrack(tracks[idx - 1], { syncView: true });
+      return tracks.find((t) => t.id === shuffleQueue[pi]) || null;
     }
+    const idx = getCurrentIndex();
+    return idx > 0 ? tracks[idx - 1] : null;
+  }
+
+  function skipPrev() {
+    if (position > 3) { seekTo(0); return; }
+    const prev = computePrevTrack();
+    if (prev) playTrack(prev, { syncView: true });
   }
 
   function skipNext() {
@@ -1374,6 +1429,7 @@ function iconMarkup(name, cls = "icon") {
   function seekTo(sec) {
     if (!isFinite(sec) || sec < 0) return;
     const engine = activeEngine();
+    if (popoutActive && engine === "youtube") return; // popout has its own seek bar
     if (engine === "youtube") YouTubeEngine.seekTo(sec);
     else if (engine === "audio") AudioEngine.seekTo(sec);
     else if (engine === "spotify") SpotifyEngine.seekTo(sec);
@@ -2502,9 +2558,11 @@ function iconMarkup(name, cls = "icon") {
     // pp-error is kept hidden — errors are now routed to the toast notification
     pp.errorEl.hidden = true;
 
-    pp.ytWrap.hidden = !(t && t.service === "youtube");
+    const isYoutubeTrack = !!(t && t.service === "youtube");
+    pp.ytWrap.hidden = !isYoutubeTrack || popoutActive;
     pp.waveformEl.hidden = !(t && t.service === "direct_audio");
-    if (pp.pipHintEl) pp.pipHintEl.hidden = !(t && t.service === "youtube");
+    if (pp.pipHintEl) pp.pipHintEl.hidden = !isYoutubeTrack || popoutActive;
+    if (pp.popoutActiveNote) pp.popoutActiveNote.hidden = !(isYoutubeTrack && popoutActive);
 
     pp.badgeRow.innerHTML = "";
     if (t) pp.badgeRow.appendChild(Services.badgeEl(t.service));
@@ -2514,6 +2572,10 @@ function iconMarkup(name, cls = "icon") {
 
     setIcon(pp.playBtn, playing ? "pause" : "play");
     pp.volumeSlider.value = volume;
+
+    const transportInert = isYoutubeTrack && popoutActive;
+    pp.playBtn.classList.toggle("transport-inert", transportInert);
+    pp.progressTrack.classList.toggle("transport-inert", transportInert);
 
     renderTransportInto(pp);
   }
