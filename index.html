@@ -2,75 +2,283 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>PiP × loadVideoById 検証用ページ</title>
-<style>
-  body { font-family: sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; background:#111; color:#eee; }
-  h1 { font-size: 18px; }
-  ol { line-height: 1.9; }
-  #player { width: 480px; height: 270px; background:#000; margin: 16px 0; }
-  button { padding: 10px 18px; font-size: 15px; cursor: pointer; background:#e94560; color:#fff; border:none; border-radius:6px; }
-  button:hover { background:#c53350; }
-  #status { margin-top: 12px; font-size: 14px; color: #9ad; white-space: pre-wrap; }
-  input { padding: 6px 8px; width: 140px; }
-  .row { display:flex; gap:8px; align-items:center; margin-bottom: 8px; }
-</style>
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>PlatHub — マルチプラットフォーム統合プレーヤー</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
-<h1>PiP × loadVideoById() 検証用ページ</h1>
-<p>PlatHubが実際に使っている「同じプレーヤーで動画IDだけ差し替える」処理
-（<code>player.loadVideoById(videoId)</code>）だけを、他の要素を一切足さずに再現したページです。</p>
+<!-- Icon sprite is fetched and injected here on load (see js/app.js) -->
+<div id="iconSpriteHost" aria-hidden="true"></div>
 
-<div class="row">
-  <label>1曲目のVideo ID: <input id="videoId1" value="jNQXAC9IVRw"></label>
+<div id="app">
+
+  <!-- ═══ Header ═══ -->
+  <header class="header">
+    <span class="logo">◈ PlatHub</span>
+    <div class="onair" id="onairLamp">
+      <span class="onair-dot"></span>
+      <span class="onair-text">ON AIR</span>
+    </div>
+    <div class="header-right">
+      <button class="btn-outline btn-sm spotify-auth-btn" id="spotifyAuthBtn">Spotifyでログイン</button>
+      <span class="track-count" id="trackCount">0 tracks</span>
+      <button class="settings-btn" id="settingsBtn" title="設定"><svg class="icon"><use href="#icon-settings"></use></svg></button>
+    </div>
+  </header>
+
+  <!-- ═══ Main ═══ -->
+  <div class="main">
+
+    <!-- Sidebar: playlists (desktop) -->
+    <aside class="sidebar" id="sidebarView">
+      <div class="sidebar-header">
+        <div class="sidebar-title">PLAYLISTS</div>
+        <button class="btn-outline btn-sm" id="toggleNewPlaylistFormDesktop">+ 新規</button>
+      </div>
+      <div class="add-form" id="newPlaylistFormDesktop" hidden>
+        <input type="text" id="newPlaylistInputDesktop" placeholder="プレイリスト名を入力" class="input">
+        <button class="btn-primary" id="createPlaylistBtnDesktop" style="margin-top:8px; width:100%;">作成</button>
+      </div>
+      <div id="playlistsListDesktop" class="playlists-list"></div>
+    </aside>
+
+    <!-- Center: track list -->
+    <section class="tracks-view" id="tracksView">
+      <div class="tracks-header">
+        <div>
+          <div class="tracks-title" id="activePlName">My Mix</div>
+          <div class="tracks-sub" id="activePlCount">0 トラック</div>
+        </div>
+        <div class="tracks-header-actions">
+          <button class="btn-outline radio-btn" id="headerRadioBtn" title="このリストを連続再生">
+            <svg class="icon"><use href="#icon-radio"></use></svg><span class="radio-btn-label" id="headerRadioBtnLabel">RADIO</span>
+          </button>
+          <button class="btn-outline" id="toggleAddForm">+ 追加</button>
+        </div>
+      </div>
+
+      <div class="add-form" id="addForm" hidden>
+        <input type="text" id="addTitleInput" placeholder="タイトル（省略可）" class="input">
+        <div class="add-form-row">
+          <input type="text" id="addUrlInput" placeholder="YouTube / Spotify / Podcast / MP3 URL を貼り付け" class="input">
+          <button class="btn-primary" id="addTrackBtn">追加</button>
+        </div>
+        <p class="add-error" id="addError" hidden></p>
+        <p class="add-hint">対応: youtube.com · open.spotify.com/track|playlist|album · podcasts.apple.com · .mp3/.ogg · 任意のPodcastフィード</p>
+      </div>
+
+      <div class="import-sources" id="importSourcesPanel" hidden></div>
+
+      <div class="track-list" id="trackList"></div>
+    </section>
+
+    <!-- Right: player panel (desktop) -->
+    <section class="player-panel" id="playerPanelDesktop">
+      <div id="playerPanelContentDesktop"></div>
+    </section>
+
+    <!-- Mobile: playlists view -->
+    <section class="mobile-playlists-view" id="mobilePlaylistsView" hidden>
+      <div class="tracks-header">
+        <div class="tracks-title">プレイリスト</div>
+        <button class="btn-outline btn-sm" id="toggleNewPlaylistForm">+ 新規作成</button>
+      </div>
+      <div class="add-form" id="newPlaylistForm" hidden>
+        <div class="add-form-row">
+          <input type="text" id="newPlaylistInput" placeholder="プレイリスト名を入力" class="input">
+          <button class="btn-primary" id="createPlaylistBtn">作成</button>
+        </div>
+      </div>
+      <div id="playlistsListMobile" class="playlists-list"></div>
+    </section>
+
+    <!-- Mobile: fullscreen player -->
+    <section class="mobile-player-view" id="mobilePlayerView" hidden>
+      <div id="playerPanelContentMobile"></div>
+    </section>
+
+    <!-- Mobile: settings view -->
+    <section class="mobile-settings-view" id="mobileSettingsView" hidden>
+      <div class="settings-content" id="settingsContentMobile"></div>
+    </section>
+
+  </div>
+
+  <!-- ═══ Mini bar (mobile) ═══ -->
+  <div class="minibar" id="miniBar" hidden>
+    <div class="minibar-info">
+      <div class="minibar-title" id="miniBarTitle"></div>
+      <div class="minibar-progress">
+        <div class="progress-track compact" id="miniBarProgressTrack">
+          <div class="progress-fill" id="miniBarProgressFill"></div>
+        </div>
+      </div>
+    </div>
+    <button class="minibar-play" id="miniBarPlayBtn"><svg class="icon"><use href="#icon-play"></use></svg></button>
+    <button class="minibar-next" id="miniBarNextBtn"><svg class="icon"><use href="#icon-next"></use></svg></button>
+  </div>
+
+  <!-- ═══ Desktop bottom bar ═══ -->
+  <div class="desktop-bar" id="desktopBar">
+    <div class="db-nowplaying" id="dbNowPlaying">
+      <div class="db-title" id="dbTitle">未選択</div>
+      <div class="db-meta" id="dbMeta"></div>
+    </div>
+    <div class="db-controls">
+      <div class="db-buttons">
+        <button class="ctrl-btn mode-btn" id="dbShuffleBtn" title="シャッフル"><svg class="icon"><use href="#icon-shuffle"></use></svg></button>
+        <button class="ctrl-btn" id="dbPrevBtn"><svg class="icon"><use href="#icon-prev"></use></svg></button>
+        <button class="play-btn" id="dbPlayBtn"><svg class="icon"><use href="#icon-play"></use></svg></button>
+        <button class="ctrl-btn" id="dbNextBtn"><svg class="icon"><use href="#icon-next"></use></svg></button>
+        <button class="ctrl-btn mode-btn" id="dbRepeatBtn" title="繰り返しなし"><svg class="icon"><use href="#icon-repeat"></use></svg></button>
+      </div>
+      <div class="progress-row">
+        <span class="time-label" id="dbCurrentTime">0:00</span>
+        <div class="progress-track" id="dbProgressTrack">
+          <div class="progress-fill" id="dbProgressFill"></div>
+          <div class="progress-handle" id="dbProgressHandle"></div>
+        </div>
+        <span class="time-label" id="dbDuration">0:00</span>
+      </div>
+    </div>
+    <div class="db-right">
+      <div class="onair onair-sm" id="dbOnairLamp">
+        <span class="onair-dot"></span>
+        <span class="onair-text">ON AIR</span>
+      </div>
+      <input type="range" id="dbVolumeSlider" class="volume-slider" min="0" max="1" step="0.02" value="0.8">
+    </div>
+  </div>
+
+  <!-- ═══ Mobile tab bar ═══ -->
+  <nav class="tabbar" id="tabBar">
+    <button class="tab-btn" data-tab="playlists">
+      <svg class="icon tab-icon"><use href="#icon-list"></use></svg><span class="tab-label">リスト</span>
+    </button>
+    <button class="tab-btn active" data-tab="tracks">
+      <svg class="icon tab-icon"><use href="#icon-track"></use></svg><span class="tab-label">トラック</span>
+    </button>
+    <button class="tab-btn" data-tab="player">
+      <svg class="icon tab-icon"><use href="#icon-play"></use></svg><span class="tab-label">プレーヤー</span>
+    </button>
+    <button class="tab-btn" data-tab="settings">
+      <svg class="icon tab-icon"><use href="#icon-settings"></use></svg><span class="tab-label">設定</span>
+    </button>
+  </nav>
+
 </div>
-<div class="row">
-  <label>2曲目のVideo ID: <input id="videoId2" value="M7lc1UVf-VE"></label>
+
+<!-- ═══ Settings Panel (desktop: slide-in drawer on the right) ═══ -->
+<aside class="settings-panel" id="settingsPanel" hidden>
+  <div class="settings-inner">
+    <div class="settings-header">
+      <span class="settings-title">設定</span>
+      <button class="settings-close-btn" id="settingsCloseBtn"><svg class="icon"><use href="#icon-close"></use></svg></button>
+    </div>
+    <div class="settings-content" id="settingsContentDesktop"></div>
+  </div>
+</aside>
+<div class="settings-overlay" id="settingsOverlay" hidden></div>
+
+<!-- ═══ Bulk import modal ═══ -->
+<div class="modal-overlay" id="bulkImportModal" hidden>
+  <div class="modal-box">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="bulkImportTitle">番組名</div>
+        <div class="modal-subtitle" id="bulkImportSubtitle">Podcast ・ 0 件</div>
+      </div>
+      <button class="modal-close-btn" id="bulkImportCloseBtn"><svg class="icon"><use href="#icon-close"></use></svg></button>
+    </div>
+    <label class="bulk-import-select-all">
+      <input type="checkbox" id="bulkImportSelectAll" checked>
+      <span>すべて選択 / 解除</span>
+    </label>
+    <div class="bulk-import-list" id="bulkImportList"></div>
+    <div class="modal-footer">
+      <span class="bulk-import-count" id="bulkImportCount">0 / 0 件を追加</span>
+      <div class="modal-footer-buttons">
+        <button class="btn-outline" id="bulkImportCancelBtn">キャンセル</button>
+        <button class="btn-primary" id="bulkImportAddBtn">追加する</button>
+      </div>
+    </div>
+  </div>
 </div>
 
-<div id="player"></div>
+<!-- ═══ Toast ═══ -->
+<div class="toast" id="toast" hidden></div>
 
-<button id="switchBtn">2曲目に切り替える（loadVideoById）</button>
-
-<ol>
-  <li>上のVideo IDを好きな動画のものに書き換える（そのままでも動作確認は可能）</li>
-  <li>自動再生されるので、<strong>映像の上（文字やロゴが出ていない場所）を右クリック</strong>する</li>
-  <li>出てきたメニューに「ピクチャー イン ピクチャー」があればクリックする</li>
-  <li>PiPウィンドウが出た状態のまま、上の「2曲目に切り替える」ボタンを押す</li>
-  <li><strong>PiPウィンドウが閉じるか、そのまま2曲目の再生を続けるか</strong>を確認する</li>
-</ol>
-<p style="color:#e94560;">※ PlatHub本番と同じ設定（YouTube純正の操作パネルは非表示）にしています。
-映像そのものの上で右クリックしてください。</p>
-
-<div id="status">読み込み中…</div>
+<!-- Player panel template -->
+<template id="playerPanelTemplate">
+  <div class="pp-error" hidden></div>
+  <div class="pp-youtube-wrap" hidden>
+    <div class="pp-youtube-host"></div>
+    <button class="pp-popout-btn" title="別ウィンドウで再生（バックグラウンド再生対策）">
+      <svg class="icon"><use href="#icon-popout"></use></svg><span>ポップアウト</span>
+    </button>
+  </div>
+  <div class="pp-pip-hint" hidden>
+    <svg class="icon icon-inline"><use href="#icon-info"></use></svg>
+    <span>動画を右クリック（スマホは長押し）して「ピクチャー イン ピクチャー」を選ぶと、タブを切り替えても再生が続きます</span>
+  </div>
+  <div class="pp-info">
+    <div class="pp-badge-row"></div>
+    <div class="pp-track-title">トラックを選択して再生</div>
+    <div class="pp-track-artist"></div>
+    <div class="pp-onair-wrap">
+      <div class="onair">
+        <span class="onair-dot"></span><span class="onair-text">ON AIR</span>
+      </div>
+    </div>
+  </div>
+  <div class="pp-waveform" hidden></div>
+  <div class="pp-controls">
+    <div class="pp-buttons">
+      <button class="ctrl-btn mode-btn pp-shuffle" title="シャッフル"><svg class="icon"><use href="#icon-shuffle"></use></svg></button>
+      <button class="ctrl-btn pp-prev"><svg class="icon"><use href="#icon-prev"></use></svg></button>
+      <button class="play-btn pp-play"><svg class="icon"><use href="#icon-play"></use></svg></button>
+      <button class="ctrl-btn pp-next"><svg class="icon"><use href="#icon-next"></use></svg></button>
+      <button class="ctrl-btn mode-btn pp-repeat" title="繰り返しなし"><svg class="icon"><use href="#icon-repeat"></use></svg></button>
+    </div>
+    <div class="progress-row">
+      <span class="time-label pp-current">0:00</span>
+      <div class="progress-track pp-track">
+        <div class="progress-fill pp-fill"></div>
+        <div class="progress-handle pp-handle"></div>
+      </div>
+      <span class="time-label pp-duration">0:00</span>
+    </div>
+    <div class="pp-volume-row">
+      <span class="vol-icon"><svg class="icon"><use href="#icon-volume-low"></use></svg></span>
+      <input type="range" class="volume-slider pp-volume" min="0" max="1" step="0.02" value="0.8">
+      <span class="vol-icon"><svg class="icon"><use href="#icon-volume-high"></use></svg></span>
+    </div>
+  </div>
+  <div class="pp-playing-from" hidden>
+    <svg class="icon icon-inline"><use href="#icon-broadcast"></use></svg>
+    <span class="pp-playing-from-label"></span>
+  </div>
+</template>
 
 <script src="https://www.youtube.com/iframe_api"></script>
-<script>
-  let player;
-  const statusEl = document.getElementById('status');
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/services.js"></script>
+<script src="js/podcast-feed-resolver.js"></script>
+<script src="js/apple-podcast-resolver.js"></script>
+<script src="js/spotify-auth.js"></script>
+<script src="js/spotify-resolver.js"></script>
+<script src="js/youtube-engine.js"></script>
+<script src="js/audio-engine.js"></script>
+<script src="js/spotify-engine.js"></script>
+<script src="js/player-panel.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/app.js"></script>
 
-  function log(msg) {
-    statusEl.textContent += '\n' + new Date().toLocaleTimeString() + '  ' + msg;
-  }
-
-  function onYouTubeIframeAPIReady() {
-    player = new YT.Player('player', {
-      videoId: document.getElementById('videoId1').value,
-      playerVars: { autoplay: 1, controls: 0, rel: 0, playsinline: 1 },
-      events: {
-        onReady: () => log('1曲目 読み込み完了。再生中に右クリックでPiPを試してください。'),
-        onStateChange: (e) => {
-          if (e.data === YT.PlayerState.PLAYING) log('再生中: ' + player.getVideoData().video_id);
-        },
-      },
-    });
-  }
-
-  document.getElementById('switchBtn').addEventListener('click', () => {
-    const id2 = document.getElementById('videoId2').value;
-    log('loadVideoById(' + id2 + ') を呼び出しました（PlatHubと全く同じ命令）');
-    player.loadVideoById(id2);
-  });
-</script>
 </body>
 </html>
