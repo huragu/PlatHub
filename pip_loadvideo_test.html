@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>PiP × loadVideoById 検証用ページ</title>
+<style>
+  body { font-family: sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; background:#111; color:#eee; }
+  h1 { font-size: 18px; }
+  ol { line-height: 1.9; }
+  #player { width: 480px; height: 270px; background:#000; margin: 16px 0; }
+  button { padding: 10px 18px; font-size: 15px; cursor: pointer; background:#e94560; color:#fff; border:none; border-radius:6px; }
+  button:hover { background:#c53350; }
+  #status { margin-top: 12px; font-size: 14px; color: #9ad; white-space: pre-wrap; }
+  input { padding: 6px 8px; width: 140px; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>PiP × loadVideoById() 検証用ページ</h1>
+<p>PlatHubが実際に使っている「同じプレーヤーで動画IDだけ差し替える」処理
+（<code>player.loadVideoById(videoId)</code>）だけを、他の要素を一切足さずに再現したページです。</p>
+
+<div class="row">
+  <label>1曲目のVideo ID: <input id="videoId1" value="jNQXAC9IVRw"></label>
+</div>
+<div class="row">
+  <label>2曲目のVideo ID: <input id="videoId2" value="M7lc1UVf-VE"></label>
+</div>
+
+<div id="player"></div>
+
+<button id="switchBtn">2曲目に切り替える（loadVideoById）</button>
+
+<ol>
+  <li>上のVideo IDを好きな動画のものに書き換える（そのままでも動作確認は可能）</li>
+  <li>動画が再生されたら、<strong>動画を右クリック→「ピクチャー イン ピクチャー」</strong>を選ぶ</li>
+  <li>PiPウィンドウが出た状態のまま、上の「2曲目に切り替える」ボタンを押す</li>
+  <li><strong>PiPウィンドウが閉じるか、そのまま2曲目の再生を続けるか</strong>を確認する</li>
+</ol>
+
+<div id="status">読み込み中…</div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+  let player;
+  const statusEl = document.getElementById('status');
+
+  function log(msg) {
+    statusEl.textContent += '\n' + new Date().toLocaleTimeString() + '  ' + msg;
+  }
+
+  function onYouTubeIframeAPIReady() {
+    player = new YT.Player('player', {
+      videoId: document.getElementById('videoId1').value,
+      playerVars: { autoplay: 1, controls: 1 },
+      events: {
+        onReady: () => log('1曲目 読み込み完了。再生中に右クリックでPiPを試してください。'),
+        onStateChange: (e) => {
+          if (e.data === YT.PlayerState.PLAYING) log('再生中: ' + player.getVideoData().video_id);
+        },
+      },
+    });
+  }
+
+  document.getElementById('switchBtn').addEventListener('click', () => {
+    const id2 = document.getElementById('videoId2').value;
+    log('loadVideoById(' + id2 + ') を呼び出しました（PlatHubと全く同じ命令）');
+    player.loadVideoById(id2);
+  });
+</script>
+</body>
+</html>
