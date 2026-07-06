@@ -736,6 +736,7 @@ function iconMarkup(name, cls = "icon") {
     stopBackgroundNudge();
     backgroundNudgeTimer = setInterval(() => {
       if (!document.hidden) { stopBackgroundNudge(); return; }
+      if (popoutActive) return; // popout has its own independent tab/window — nothing to nudge here
       if (activeEngine() === "youtube" && playing) {
         try { YouTubeEngine.play(); } catch (_) {}
       }
@@ -746,6 +747,13 @@ function iconMarkup(name, cls = "icon") {
   }
 
   document.addEventListener("visibilitychange", () => {
+    // While a popout is handling YouTube playback, the MAIN tab's own
+    // visibility is irrelevant — the popout is a separate browsing
+    // context with its own Page Visibility state. Acting on it here
+    // would call play()/pause() on the orphaned main-window iframe,
+    // which can create double audio alongside the popout.
+    if (popoutActive) return;
+
     if (document.hidden) {
       // Tab going to background.
       // Always capture the playing state — we need it on return
@@ -966,26 +974,40 @@ function iconMarkup(name, cls = "icon") {
     const popup = window.open(
       `popout.html?${params.toString()}`,
       "plathub_popout",
-      "width=320,height=340,popup=1"
+      "width=340,height=560,popup=1"
     );
     if (!popup) {
       showToast("ポップアウトウィンドウを開けませんでした（ポップアップブロックの可能性があります）", { duration: 5000, icon: "warning" });
       return;
     }
 
-    popoutWindowRef = popup;
-    popoutActive = true;
-    popoutIsPip = false;
-    pauseMainForPopout();
-
-    // Fallback in case the 'closed' message doesn't arrive (e.g. the
-    // popup was closed in a way that skips beforeunload in some browsers).
-    const closedPoll = setInterval(() => {
-      if (!popoutWindowRef || popoutWindowRef.closed) {
-        clearInterval(closedPoll);
-        handlePopoutClosed(null);
+    // Some browsers return a non-null Window synchronously from
+    // window.open() even when a popup blocker will silently close it a
+    // moment later, without ever actually showing it. Verify it's still
+    // genuinely open a beat later, BEFORE committing to popoutActive
+    // (hiding the main video, disabling controls, etc.) — otherwise
+    // PlatHub's state gets stuck believing a popout is active/visible
+    // when nothing ever actually appeared on screen.
+    setTimeout(() => {
+      if (popup.closed) {
+        showToast("ポップアウトウィンドウが開けませんでした（ポップアップブロックの可能性があります）。ブラウザのアドレスバー付近に表示されるブロック通知をご確認ください。", { duration: 6000, icon: "warning" });
+        return;
       }
-    }, 1000);
+
+      popoutWindowRef = popup;
+      popoutActive = true;
+      popoutIsPip = false;
+      pauseMainForPopout();
+
+      // Fallback in case the 'closed' message doesn't arrive (e.g. the
+      // popup was closed in a way that skips beforeunload in some browsers).
+      const closedPoll = setInterval(() => {
+        if (!popoutWindowRef || popoutWindowRef.closed) {
+          clearInterval(closedPoll);
+          handlePopoutClosed(null);
+        }
+      }, 1000);
+    }, 250);
   }
 
   function pauseMainForPopout() {
@@ -2124,7 +2146,7 @@ function iconMarkup(name, cls = "icon") {
     // fully hidden) when browsing a different mobile tab — see the CSS
     // comment on .mini-video-float for why this never moves the iframe.
     const t = getCurrentTrack();
-    const showMiniVideo = tab !== "player" && t?.service === "youtube";
+    const showMiniVideo = tab !== "player" && t?.service === "youtube" && !popoutActive;
     mobilePlayerView.classList.toggle("mini-video-float", showMiniVideo);
     // The mini box overlaps the minibar's usual spot — hide the minibar
     // while the floating video is showing so they don't visually collide.
@@ -2991,7 +3013,7 @@ function iconMarkup(name, cls = "icon") {
     // the mobile/desktop breakpoint, since the visible container
     // physically changes.
     renderAll();
-    if (getCurrentTrack()?.service === "youtube") {
+    if (!popoutActive && getCurrentTrack()?.service === "youtube") {
       const hostEl = getVisibleYtHost();
       if (hostEl && !hostEl.querySelector("iframe")) {
         YouTubeEngine.load(hostEl, getCurrentTrack().sourceId, volume, playing);

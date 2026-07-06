@@ -57,6 +57,7 @@
     text-align: center;
     min-height: 0;
     padding: 0 4px;
+    margin-top: 12px;
   }
   #trackBadge {
     font-family: 'Space Grotesk', sans-serif;
@@ -169,18 +170,14 @@
   #volumeSlider { flex: 1; }
 
   #playerHost {
-    /* Kept in the DOM (YT.Player needs a real, rendered element to
-       control) but made visually invisible via a near-zero-size box
-       rather than display:none — display:none is avoided specifically
-       because it more closely resembles "not rendered at all", which
-       may invite extra background-media throttling in some browsers. */
-    position: absolute;
-    width: 2px;
-    height: 2px;
+    width: 100%;
+    aspect-ratio: 16/9;
+    border-radius: 10px;
     overflow: hidden;
-    opacity: 0;
-    pointer-events: none;
+    background: #000;
+    flex-shrink: 0;
   }
+  #playerHost iframe { width: 100%; height: 100%; border: none; }
   #status {
     font-size: 10px;
     color: var(--text-faint);
@@ -198,6 +195,8 @@
     <span class="dot"></span>
     <span>PlatHub ポップアウト再生中</span>
   </div>
+
+  <div id="playerHost"></div>
 
   <div id="trackInfo">
     <div id="trackBadge">YouTube</div>
@@ -228,7 +227,6 @@
     <input type="range" id="volumeSlider" min="0" max="100" value="80">
   </div>
 
-  <div id="playerHost"></div>
   <div id="status">読み込み中…</div>
 </div>
 
