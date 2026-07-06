@@ -34,10 +34,13 @@
 
 <ol>
   <li>上のVideo IDを好きな動画のものに書き換える（そのままでも動作確認は可能）</li>
-  <li>動画が再生されたら、<strong>動画を右クリック→「ピクチャー イン ピクチャー」</strong>を選ぶ</li>
+  <li>自動再生されるので、<strong>映像の上（文字やロゴが出ていない場所）を右クリック</strong>する</li>
+  <li>出てきたメニューに「ピクチャー イン ピクチャー」があればクリックする</li>
   <li>PiPウィンドウが出た状態のまま、上の「2曲目に切り替える」ボタンを押す</li>
   <li><strong>PiPウィンドウが閉じるか、そのまま2曲目の再生を続けるか</strong>を確認する</li>
 </ol>
+<p style="color:#e94560;">※ PlatHub本番と同じ設定（YouTube純正の操作パネルは非表示）にしています。
+映像そのものの上で右クリックしてください。</p>
 
 <div id="status">読み込み中…</div>
 
@@ -53,7 +56,7 @@
   function onYouTubeIframeAPIReady() {
     player = new YT.Player('player', {
       videoId: document.getElementById('videoId1').value,
-      playerVars: { autoplay: 1, controls: 1 },
+      playerVars: { autoplay: 1, controls: 0, rel: 0, playsinline: 1 },
       events: {
         onReady: () => log('1曲目 読み込み完了。再生中に右クリックでPiPを試してください。'),
         onStateChange: (e) => {
