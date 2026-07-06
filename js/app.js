@@ -1151,12 +1151,16 @@ function iconMarkup(name, cls = "icon") {
     } else if (data.type === "position") {
       // Keep the main window's (visually inert, but still informative)
       // progress bar and play-state in sync with what's actually
-      // audible in the popout.
+      // audible in the popout. Also defensively re-assert the "video
+      // hidden, main engine paused" state on every report — this
+      // self-heals within 500ms if anything manages to disturb it.
       if (popoutActive) {
         position = data.position || 0;
         duration = data.duration || 0;
         playing = !!data.playing;
+        try { YouTubeEngine.pause(); } catch (_) {}
         renderTransport();
+        renderPlayerPanels();
       }
     } else if (data.type === "error") {
       showToast(`ポップアウト側で再生エラーが発生しました（コード ${data.code}）`, { duration: 5000, icon: "warning" });
