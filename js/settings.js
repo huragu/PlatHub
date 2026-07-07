@@ -25,7 +25,7 @@ const Settings = (() => {
     auto_update_check:    true,   // 起動時に自動でインポート元の新着をチェックする
     confirm_track_delete: false,  // トラック削除ボタンに確認ダイアログを挟む
     force_marquee:        false,  // OSの「視差効果を減らす」設定を無視してスクロール表示を使う
-    yt_worker_url:        "",     // Cloudflare Worker URL for YouTube playlist/channel fetch
+    yt_worker_url:        "https://plathub.mmookesu-0203.workers.dev",  // Cloudflare Worker URL for YouTube playlist/channel fetch
   };
 
   /* ── Persistence ── */

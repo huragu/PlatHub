@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlatHub — 操作パネル</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<style>
+  :root {
+    --bg: #0D0D14;
+    --red: #E94560;
+    --red-dim: #E9456044;
+    --text: #F5F5F0;
+    --text-dim: #888888;
+    --text-faint: #555555;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    height: 100%;
+    overflow: hidden;
+    user-select: none;
+  }
+  #container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 20px 20px 16px;
+  }
+  #header {
+    font-size: 10px;
+    color: var(--text-faint);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-bottom: 16px;
+  }
+  #header .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--red);
+    flex-shrink: 0;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+  #trackInfo {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-height: 0;
+    padding: 0 4px;
+  }
+  #trackBadge {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--red);
+    background: var(--red-dim);
+    border: 1px solid #E9456055;
+    border-radius: 4px;
+    padding: 2px 8px;
+    margin-bottom: 10px;
+  }
+  #trackTitle {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 17px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  #trackArtist {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-top: 5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  #progressRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-top: 16px;
+  }
+  #progressRow span {
+    font-size: 10px;
+    color: var(--text-faint);
+    min-width: 32px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: #2a2a3a;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--red);
+    cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 12px; height: 12px; border: none;
+    border-radius: 50%;
+    background: var(--red);
+    cursor: pointer;
+  }
+  #progressSlider { background: linear-gradient(to right, var(--red) 0%, var(--red) 0%, #2a2a3a 0%); }
+
+  #controlsRow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    flex-shrink: 0;
+    margin-top: 16px;
+  }
+  .ctrl-btn {
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    opacity: 0.85;
+    transition: opacity .15s, transform .1s;
+  }
+  .ctrl-btn:hover { opacity: 1; }
+  .ctrl-btn:active { transform: scale(0.92); }
+  .ctrl-btn svg { width: 20px; height: 20px; }
+  #playPauseBtn {
+    background: var(--red);
+    border-radius: 50%;
+    width: 48px; height: 48px;
+    opacity: 1;
+  }
+  #playPauseBtn svg { width: 22px; height: 22px; }
+
+  #volumeRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-top: 16px;
+  }
+  #volumeRow svg { width: 15px; height: 15px; color: var(--text-faint); flex-shrink: 0; }
+  #volumeSlider { flex: 1; }
+
+  #status {
+    font-size: 10px;
+    color: var(--text-faint);
+    text-align: center;
+    margin-top: 10px;
+    flex-shrink: 0;
+    min-height: 12px;
+  }
+</style>
+</head>
+<body>
+
+<div id="container">
+  <div id="header">
+    <span class="dot"></span>
+    <span>PlatHub 操作パネル — 音声はメイン画面側で再生されています</span>
+  </div>
+
+  <div id="trackInfo">
+    <div id="trackBadge">—</div>
+    <div id="trackTitle">読み込み中…</div>
+    <div id="trackArtist"></div>
+  </div>
+
+  <div id="progressRow">
+    <span id="curTime">0:00</span>
+    <input type="range" id="progressSlider" min="0" max="1000" value="0">
+    <span id="durTime">0:00</span>
+  </div>
+
+  <div id="controlsRow">
+    <button class="ctrl-btn" id="prevBtn" title="前のトラック">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+    </button>
+    <button class="ctrl-btn" id="playPauseBtn" title="再生/一時停止">
+      <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+    </button>
+    <button class="ctrl-btn" id="nextBtn" title="次のトラック">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 6l8.5 6L6 18z"/></svg>
+    </button>
+  </div>
+
+  <div id="volumeRow">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 10v4h4l5 5V5L7 10H3zm13.5 2A4.5 4.5 0 0 0 14 7.97v8.05A4.5 4.5 0 0 0 16.5 12z"/></svg>
+    <input type="range" id="volumeSlider" min="0" max="100" value="80">
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const params = new URLSearchParams(window.location.search);
+  let title = params.get("title") || "";
+  let artist = params.get("artist") || "";
+  let badge = params.get("badge") || "";
+  let duration = parseFloat(params.get("duration") || "0") || 0;
+  let position = parseFloat(params.get("position") || "0") || 0;
+  let playing = params.get("playing") === "1";
+  const initialVolume = Math.min(1, Math.max(0, parseFloat(params.get("vol") || "1")));
+
+  const titleEl = document.getElementById("trackTitle");
+  const artistEl = document.getElementById("trackArtist");
+  const badgeEl = document.getElementById("trackBadge");
+  const progressSlider = document.getElementById("progressSlider");
+  const curTimeEl = document.getElementById("curTime");
+  const durTimeEl = document.getElementById("durTime");
+  const playPauseBtn = document.getElementById("playPauseBtn");
+  const playIcon = document.getElementById("playIcon");
+  const volumeSlider = document.getElementById("volumeSlider");
+  const prevBtn = document.getElementById("prevBtn");
+  const nextBtn = document.getElementById("nextBtn");
+  const statusEl = document.getElementById("status");
+
+  const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
+  const ICON_PAUSE = '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>';
+
+  function formatTime(s) {
+    if (!s || isNaN(s) || s < 0) return "0:00";
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60).toString().padStart(2, "0");
+    return `${m}:${sec}`;
+  }
+
+  function updatePlayIcon() {
+    playIcon.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+  }
+
+  function renderProgress() {
+    const pct = duration > 0 ? (position / duration) * 1000 : 0;
+    progressSlider.value = pct;
+    progressSlider.style.background =
+      `linear-gradient(to right, var(--red) ${pct / 10}%, #2a2a3a ${pct / 10}%)`;
+    curTimeEl.textContent = formatTime(position);
+    durTimeEl.textContent = formatTime(duration);
+  }
+
+  titleEl.textContent = title;
+  artistEl.textContent = artist;
+  badgeEl.textContent = badge;
+  volumeSlider.value = Math.round(initialVolume * 100);
+  updatePlayIcon();
+  renderProgress();
+  document.title = title ? `▶ ${title} — PlatHub` : "PlatHub — 操作パネル";
+
+  function post(type, extra) {
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ source: "plathub-remote", type, ...extra }, window.location.origin);
+      }
+    } catch (_) {}
+  }
+
+  let seeking = false;
+
+  playPauseBtn.addEventListener("click", () => post("togglePlay", {}));
+  nextBtn.addEventListener("click", () => post("next", {}));
+  prevBtn.addEventListener("click", () => post("prev", { position }));
+
+  volumeSlider.addEventListener("input", () => {
+    post("setVolume", { volume: +volumeSlider.value / 100 });
+  });
+
+  progressSlider.addEventListener("input", () => {
+    seeking = true;
+    const pct = +progressSlider.value / 1000;
+    curTimeEl.textContent = formatTime(pct * duration);
+    progressSlider.style.background =
+      `linear-gradient(to right, var(--red) ${pct * 100}%, #2a2a3a ${pct * 100}%)`;
+  });
+  progressSlider.addEventListener("change", () => {
+    const pct = +progressSlider.value / 1000;
+    post("seek", { position: pct * duration });
+    seeking = false;
+  });
+
+  // Local ticking between state-sync messages, so the progress bar moves
+  // smoothly rather than only jumping every ~500ms when a sync arrives.
+  setInterval(() => {
+    if (!seeking && playing && duration > 0) {
+      position = Math.min(duration, position + 0.5);
+      renderProgress();
+    }
+  }, 500);
+
+  window.addEventListener("beforeunload", () => post("closed", {}));
+
+  /* ── State sync from the main window ── */
+  window.addEventListener("message", (e) => {
+    if (e.origin !== window.location.origin) return;
+    const data = e.data;
+    if (!data || data.source !== "plathub-main") return;
+
+    if (data.type === "state") {
+      if (typeof data.title === "string") { title = data.title; titleEl.textContent = title; document.title = title ? `▶ ${title} — PlatHub` : "PlatHub — 操作パネル"; }
+      if (typeof data.artist === "string") { artist = data.artist; artistEl.textContent = artist; }
+      if (typeof data.badge === "string") { badge = data.badge; badgeEl.textContent = badge; }
+      if (typeof data.position === "number") position = data.position;
+      if (typeof data.duration === "number") duration = data.duration;
+      if (typeof data.playing === "boolean") { playing = data.playing; updatePlayIcon(); }
+      if (typeof data.volume === "number") volumeSlider.value = Math.round(data.volume * 100);
+      if (!seeking) renderProgress();
+    } else if (data.type === "noTrack") {
+      statusEl.textContent = "再生できるトラックがありません。このウィンドウを閉じてください。";
+    }
+  });
+
+  // Let the opener know we're ready for an initial full state push.
+  post("ready", {});
+})();
+</script>
+</body>
+</html>

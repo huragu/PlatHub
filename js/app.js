@@ -430,8 +430,29 @@ function iconMarkup(name, cls = "icon") {
    * Worker endpoint:  GET {workerUrl}/playlist?id={playlistId}
    * Response JSON:    { playlistTitle, videos: [{id, title, channelTitle}] }
    */
+  /**
+   * Normalizes a user-entered Worker URL: strips a trailing slash, and —
+   * importantly — prepends https:// if the user typed a bare domain
+   * without a protocol (e.g. "my-worker.workers.dev" instead of
+   * "https://my-worker.workers.dev"). Without this, fetch() treats a
+   * protocol-less string as a RELATIVE path against the current page's
+   * own origin, silently requesting something like
+   * "https://huragu.github.io/PlatHub/my-worker.workers.dev/playlist"
+   * (a 404 on GitHub Pages, never reaching the Worker at all) — which
+   * is confusing because typing the same bare domain directly into the
+   * browser's address bar works fine there (address bars auto-assume
+   * https://, but fetch() calls do not).
+   */
+  function normalizeWorkerUrl(workerUrl) {
+    let url = (workerUrl || "").trim().replace(/\/$/, "");
+    if (url && !/^https?:\/\//i.test(url)) {
+      url = `https://${url}`;
+    }
+    return url;
+  }
+
   async function fetchYouTubePlaylist(playlistId, workerUrl) {
-    const base = workerUrl.replace(/\/$/, "");
+    const base = normalizeWorkerUrl(workerUrl);
     const endpoint = `${base}/playlist?id=${encodeURIComponent(playlistId)}`;
     let res;
     try {
@@ -458,7 +479,7 @@ function iconMarkup(name, cls = "icon") {
    * Response JSON:    { channelId, channelTitle, videos: [{id, title, channelTitle}] }
    */
   async function fetchYouTubeChannel(channelRef, workerUrl) {
-    const base = workerUrl.replace(/\/$/, "");
+    const base = normalizeWorkerUrl(workerUrl);
     const param = channelRef.type === "id"
       ? `id=${encodeURIComponent(channelRef.value)}`
       : `handle=${encodeURIComponent(channelRef.value)}`;
@@ -828,6 +849,31 @@ function iconMarkup(name, cls = "icon") {
   let popoutActive = false;
   let popoutIsPip = false;
 
+  // Remote-control popout (Podcast/Spotify) — a SEPARATE, simpler kind of
+  // popout from the YouTube one above. Audio keeps playing in the MAIN
+  // window the whole time (Podcast/<audio> and Spotify's SDK don't have
+  // YouTube's background-tab-pausing problem, so there's no need to host
+  // playback elsewhere) — this window is purely a synced display + a
+  // remote control that relays commands back to the main window.
+  let remotePopoutWindowRef = null;
+  let remotePopoutActive = false;
+
+  /** Single entry point for the one "ポップアウト" button — routes to the
+   *  right kind of popout (or closes whichever one is open) based on the
+   *  current track's service. */
+  function togglePopout() {
+    if (popoutActive) { closeActivePopout(); return; }
+    if (remotePopoutActive) { closeRemotePopout(); return; }
+
+    const t = getCurrentTrack();
+    if (!t) return;
+    if (t.service === "youtube") {
+      toggleYoutubePopout();
+    } else {
+      openRemoteControlWindow(t);
+    }
+  }
+
   function toggleYoutubePopout() {
     if (popoutActive) {
       closeActivePopout();
@@ -858,6 +904,119 @@ function iconMarkup(name, cls = "icon") {
     try { popoutWindowRef.close(); } catch (_) {}
     // 'pagehide' (PiP) / poll fallback (popup) handles the rest of cleanup.
   }
+
+  /**
+   * Remote-control popout for Podcast/Spotify. Opens a small window that
+   * displays synced title/artist/progress/volume and relays control
+   * commands back — audio itself never leaves the main window, so there's
+   * no pausing/hiding needed here (unlike the YouTube popout).
+   */
+  function openRemoteControlWindow(t) {
+    const engine = activeEngine();
+    const vol = engine === "spotify" ? Math.min(1, volume * (appSettings.vol_spotify ?? 1))
+      : Math.min(1, volume * (appSettings.vol_podcast ?? 1));
+    const badge = Services.META[t.service]?.label || t.service;
+    const params = new URLSearchParams({
+      title: t.title || "",
+      artist: t.artist || "",
+      badge,
+      position: String(Math.floor(position)),
+      duration: String(Math.floor(duration)),
+      playing: playing ? "1" : "0",
+      vol: String(vol),
+    });
+    const popup = window.open(
+      `remote.html?${params.toString()}`,
+      "plathub_remote",
+      "width=320,height=420,popup=1"
+    );
+    if (!popup) {
+      showToast("操作パネルを開けませんでした（ポップアップブロックの可能性があります）", { duration: 5000, icon: "warning" });
+      return;
+    }
+
+    setTimeout(() => {
+      if (popup.closed) {
+        showToast("操作パネルが開けませんでした（ポップアップブロックの可能性があります）。ブラウザのアドレスバー付近に表示されるブロック通知をご確認ください。", { duration: 6000, icon: "warning" });
+        return;
+      }
+      remotePopoutWindowRef = popup;
+      remotePopoutActive = true;
+      renderPopoutButtonState();
+
+      const closedPoll = setInterval(() => {
+        if (!remotePopoutWindowRef || remotePopoutWindowRef.closed) {
+          clearInterval(closedPoll);
+          remotePopoutActive = false;
+          remotePopoutWindowRef = null;
+          renderPopoutButtonState();
+        }
+      }, 1000);
+    }, 250);
+  }
+
+  function closeRemotePopout() {
+    if (remotePopoutWindowRef) {
+      try { remotePopoutWindowRef.close(); } catch (_) {}
+    }
+    remotePopoutActive = false;
+    remotePopoutWindowRef = null;
+    renderPopoutButtonState();
+  }
+
+  /** Push the current playback state to the remote popout, if one is open. */
+  function pushRemoteState() {
+    if (!remotePopoutActive || !remotePopoutWindowRef || remotePopoutWindowRef.closed) return;
+    const t = getCurrentTrack();
+    if (!t) {
+      try {
+        remotePopoutWindowRef.postMessage({ source: "plathub-main", type: "noTrack" }, window.location.origin);
+      } catch (_) {}
+      return;
+    }
+    const engine = activeEngine();
+    const vol = engine === "spotify" ? Math.min(1, volume * (appSettings.vol_spotify ?? 1))
+      : Math.min(1, volume * (appSettings.vol_podcast ?? 1));
+    try {
+      remotePopoutWindowRef.postMessage({
+        source: "plathub-main",
+        type: "state",
+        title: t.title || "",
+        artist: t.artist || "",
+        badge: Services.META[t.service]?.label || t.service,
+        position, duration, playing, volume: vol,
+      }, window.location.origin);
+    } catch (_) {}
+  }
+
+  window.addEventListener("message", (e) => {
+    if (e.origin !== window.location.origin) return;
+    const data = e.data;
+    if (!data || data.source !== "plathub-remote") return;
+
+    if (data.type === "ready") {
+      pushRemoteState();
+    } else if (data.type === "togglePlay") {
+      togglePlayPause();
+      pushRemoteState();
+    } else if (data.type === "seek") {
+      seekTo(data.position);
+      pushRemoteState();
+    } else if (data.type === "setVolume") {
+      setVolumeValue(data.volume);
+      pushRemoteState();
+    } else if (data.type === "next") {
+      skipNext();
+      pushRemoteState();
+    } else if (data.type === "prev") {
+      skipPrev();
+      pushRemoteState();
+    } else if (data.type === "closed") {
+      remotePopoutActive = false;
+      remotePopoutWindowRef = null;
+      renderPopoutButtonState();
+    }
+  });
 
   /** Path 1: Document Picture-in-Picture (Chrome/Edge). */
   async function openYoutubePip(t) {
@@ -1038,9 +1197,13 @@ function iconMarkup(name, cls = "icon") {
   function renderPopoutButtonState() {
     [ppDesktop, ppMobile].forEach((pp) => {
       if (!pp || !pp.popoutBtn) return;
-      pp.popoutBtn.classList.toggle("active", popoutActive);
+      const anyActive = popoutActive || remotePopoutActive;
+      pp.popoutBtn.classList.toggle("active", anyActive);
       const label = pp.popoutBtn.querySelector("span");
-      if (label) label.textContent = popoutActive ? (popoutIsPip ? "PiP再生中…" : "再生中…") : "ポップアウト";
+      if (!label) return;
+      if (popoutActive) label.textContent = popoutIsPip ? "PiP再生中…" : "再生中…";
+      else if (remotePopoutActive) label.textContent = "操作パネル表示中…";
+      else label.textContent = "ポップアウト";
     });
   }
 
@@ -2555,7 +2718,7 @@ function iconMarkup(name, cls = "icon") {
     pp.volumeSlider.addEventListener("input", (e) => setVolumeValue(+e.target.value));
     wireSeekableTrack(pp.progressTrack, () => duration, seekTo);
     PlayerPanel.buildWaveform(pp.waveformEl);
-    if (pp.popoutBtn) pp.popoutBtn.addEventListener("click", toggleYoutubePopout);
+    if (pp.popoutBtn) pp.popoutBtn.addEventListener("click", togglePopout);
 
     // Tapping the mini floating video (mobile, non-player tab) jumps back
     // to the full player view. No-op on desktop or when already on the
@@ -2589,6 +2752,7 @@ function iconMarkup(name, cls = "icon") {
     pp.waveformEl.hidden = !(t && t.service === "direct_audio");
     if (pp.pipHintEl) pp.pipHintEl.hidden = !isYoutubeTrack || popoutActive;
     if (pp.popoutActiveNote) pp.popoutActiveNote.hidden = !(isYoutubeTrack && popoutActive);
+    if (pp.popoutBtn) pp.popoutBtn.hidden = !t;
 
     pp.badgeRow.innerHTML = "";
     if (t) pp.badgeRow.appendChild(Services.badgeEl(t.service));
@@ -2635,6 +2799,7 @@ function iconMarkup(name, cls = "icon") {
     if (ppMobile) renderTransportInto(ppMobile);
     renderTrackListActiveMarker();
     updateMediaSessionPlaybackState();
+    pushRemoteState();
   }
 
   // Persistent dbMeta children — created once and reused, so their state
