@@ -264,6 +264,7 @@ input::placeholder { color: var(--text-ghost); }
   background: rgba(233, 69, 96, 0.08);
   margin-top: 4px;
 }
+.pp-playing-from[hidden] { display: none; }
 .pp-playing-from .icon {
   color: var(--red);
   width: 0.95em;
@@ -655,6 +656,7 @@ input::placeholder { color: var(--text-ghost); }
   color: var(--text-faint);
   padding: 2px 4px 0;
 }
+.pp-pip-hint[hidden] { display: none; }
 .pp-pip-hint .icon {
   flex-shrink: 0;
   margin-top: 2px;
@@ -676,6 +678,7 @@ input::placeholder { color: var(--text-ghost); }
   font-size: 13px;
   background: rgba(233, 69, 96, 0.04);
 }
+.pp-popout-active-note[hidden] { display: none; }
 .pp-popout-active-note .icon { color: var(--red); }
 
 .transport-inert {
@@ -720,6 +723,7 @@ input::placeholder { color: var(--text-ghost); }
   gap: 3px;
   padding: 0 16px;
 }
+.pp-waveform[hidden] { display: none; }
 .wave-bar {
   width: 3px;
   border-radius: 99px;

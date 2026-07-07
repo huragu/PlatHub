@@ -90,16 +90,24 @@ const Storage = (() => {
 
   function savePlaybackSession(session) {
     try {
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ ...session, savedAt: Date.now() }));
     } catch {}
   }
 
   function loadPlaybackSession() {
     try {
       const raw = sessionStorage.getItem(SESSION_KEY);
+      sessionStorage.removeItem(SESSION_KEY); // consume once, regardless of validity below
       if (!raw) return null;
-      sessionStorage.removeItem(SESSION_KEY); // consume once
-      return JSON.parse(raw);
+      const session = JSON.parse(raw);
+      // Guard against a stale, never-consumed session (e.g. an abandoned
+      // Spotify login attempt from much earlier in the same tab) being
+      // blindly trusted to auto-resume playback on some LATER, unrelated
+      // page load. This save/load pair only exists to bridge the brief
+      // OAuth redirect round-trip, so anything older than a minute is
+      // almost certainly stale and should be discarded.
+      if (!session.savedAt || Date.now() - session.savedAt > 60000) return null;
+      return session;
     } catch { return null; }
   }
 
