@@ -912,9 +912,6 @@ function iconMarkup(name, cls = "icon") {
    * no pausing/hiding needed here (unlike the YouTube popout).
    */
   function openRemoteControlWindow(t) {
-    const engine = activeEngine();
-    const vol = engine === "spotify" ? Math.min(1, volume * (appSettings.vol_spotify ?? 1))
-      : Math.min(1, volume * (appSettings.vol_podcast ?? 1));
     const badge = Services.META[t.service]?.label || t.service;
     const params = new URLSearchParams({
       title: t.title || "",
@@ -923,7 +920,7 @@ function iconMarkup(name, cls = "icon") {
       position: String(Math.floor(position)),
       duration: String(Math.floor(duration)),
       playing: playing ? "1" : "0",
-      vol: String(vol),
+      vol: String(volume),
     });
     const popup = window.open(
       `remote.html?${params.toString()}`,
@@ -974,9 +971,6 @@ function iconMarkup(name, cls = "icon") {
       } catch (_) {}
       return;
     }
-    const engine = activeEngine();
-    const vol = engine === "spotify" ? Math.min(1, volume * (appSettings.vol_spotify ?? 1))
-      : Math.min(1, volume * (appSettings.vol_podcast ?? 1));
     try {
       remotePopoutWindowRef.postMessage({
         source: "plathub-main",
@@ -984,7 +978,7 @@ function iconMarkup(name, cls = "icon") {
         title: t.title || "",
         artist: t.artist || "",
         badge: Services.META[t.service]?.label || t.service,
-        position, duration, playing, volume: vol,
+        position, duration, playing, volume,
       }, window.location.origin);
     } catch (_) {}
   }
