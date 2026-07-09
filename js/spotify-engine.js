@@ -47,7 +47,18 @@ const SpotifyEngine = (() => {
    * Safe to call multiple times (no-ops if already initialized).
    */
   async function init() {
-    if (player) return;
+    if (player) {
+      // Already have a player instance. If it's not currently connected
+      // (the underlying connection can drop during a long background
+      // session — see the 'not_ready' listener below), actively try to
+      // RECONNECT it. Silently doing nothing here permanently strands
+      // any track queued via pendingTrackUri, since the 'ready' listener
+      // that would actually play it never fires again without this.
+      if (!ready) {
+        try { await player.connect(); } catch (_) {}
+      }
+      return;
+    }
     await waitForSdk();
 
     player = new window.Spotify.Player({
@@ -113,6 +124,16 @@ const SpotifyEngine = (() => {
       pendingTrackUri = uri;
       pendingPlayState = autoplay;
       await init();
+      // Safety net: if reconnecting still doesn't result in this track
+      // actually starting within a reasonable window, surface a clear
+      // error rather than leaving the user stuck with no feedback and a
+      // UI that silently disagrees with what Spotify itself is doing.
+      setTimeout(() => {
+        if (pendingTrackUri === uri) {
+          pendingTrackUri = null;
+          onErrorCb && onErrorCb("Spotifyへの接続が回復しませんでした。曲を選び直すか、ページを再読み込みしてください。");
+        }
+      }, 8000);
       return;
     }
     await playUri(uri, autoplay);
