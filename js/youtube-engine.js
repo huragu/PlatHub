@@ -123,7 +123,7 @@ const YouTubeEngine = (() => {
                 // Only show error if not currently playing or buffering
                 if (state !== window.YT.PlayerState.PLAYING &&
                     state !== window.YT.PlayerState.BUFFERING) {
-                  onErrorCb && onErrorCb(msg);
+                  onErrorCb && onErrorCb(msg, e.data);
                 }
               } catch (_) {}
             }, 1500);

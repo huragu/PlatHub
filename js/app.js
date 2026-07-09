@@ -375,7 +375,11 @@ function iconMarkup(name, cls = "icon") {
   }
 
   YouTubeEngine.onEnded(() => handleTrackEnded());
-  YouTubeEngine.onError((msg) => showToast(msg, { duration: 5000, icon: "warning" }));
+  YouTubeEngine.onError((msg, code) => {
+    const UNPLAYABLE_CODES = new Set([100, 101, 150]); // removed/private, or embedding disallowed — never recoverable by retrying
+    showToast(msg, { duration: 5000, icon: "warning" });
+    if (UNPLAYABLE_CODES.has(code)) handleTrackEnded();
+  });
   AudioEngine.onEnded(() => handleTrackEnded());
   AudioEngine.onError((msg) => showToast(msg, { duration: 5000, icon: "warning" }));
   AudioEngine.onTime((cur, dur) => {
@@ -1057,6 +1061,33 @@ function iconMarkup(name, cls = "icon") {
     updateMediaSession(track);
   }
 
+  /**
+   * Advances playback to `next` (already computed via nextTrack()),
+   * routing to the popout (if it should host it) or the main window's
+   * own engine as appropriate. Shared by the popout's natural 'ended'
+   * event and by auto-skipping a permanently-unplayable video on error
+   * (see the 'error' handler below) — both cases boil down to "this
+   * track is done, one way or another, move on to whatever's next".
+   */
+  function advanceToNextTrackFromPopout(next) {
+    if (!next) {
+      closeActivePopout();
+      playing = false; position = 0;
+      renderTransport();
+      updateMediaSessionPlaybackState();
+      return;
+    }
+    if (next.service === "youtube") {
+      advanceStateForTrack(next);
+      syncPopoutToCurrentTrack(next);
+    } else {
+      // Non-YouTube tracks always play via the main window's own
+      // engine — playTrack() handles that AND keeps the popout (now
+      // switching to remote/spotify mode) synced rather than closing it.
+      playTrack(next, { syncView: false });
+    }
+  }
+
   window.addEventListener("message", (e) => {
     if (e.origin !== window.location.origin) return;
     const data = e.data;
@@ -1067,23 +1098,7 @@ function iconMarkup(name, cls = "icon") {
     } else if (data.type === "ended") {
       // Fires only in youtube mode. Figure out what's next exactly once
       // (nextTrack() advances the shuffle cursor as a side effect).
-      const next = nextTrack(false);
-      if (!next) {
-        closeActivePopout();
-        playing = false; position = 0;
-        renderTransport();
-        updateMediaSessionPlaybackState();
-        return;
-      }
-      if (next.service === "youtube") {
-        advanceStateForTrack(next);
-        syncPopoutToCurrentTrack(next);
-      } else {
-        // Non-YouTube tracks always play via the main window's own
-        // engine — playTrack() handles that AND keeps the popout (now
-        // switching to remote mode) synced rather than closing it.
-        playTrack(next, { syncView: false });
-      }
+      advanceToNextTrackFromPopout(nextTrack(false));
     } else if (data.type === "requestNext") {
       const next = nextTrack(true);
       if (!next) return;
@@ -1136,7 +1151,13 @@ function iconMarkup(name, cls = "icon") {
         renderPlayerPanels();
       }
     } else if (data.type === "error") {
-      showToast(`ポップアウト側で再生エラーが発生しました（コード ${data.code}）`, { duration: 5000, icon: "warning" });
+      const UNPLAYABLE_CODES = new Set([100, 101, 150]); // removed/private, or embedding disallowed — never recoverable by retrying
+      if (UNPLAYABLE_CODES.has(data.code) && popoutMode === "youtube") {
+        showToast(`この動画は再生できないため、次の曲に進みます（コード ${data.code}）`, { duration: 5000, icon: "warning" });
+        advanceToNextTrackFromPopout(nextTrack(false));
+      } else {
+        showToast(`ポップアウト側で再生エラーが発生しました（コード ${data.code}）`, { duration: 5000, icon: "warning" });
+      }
     }
     // 'ready' is informational only.
   });
