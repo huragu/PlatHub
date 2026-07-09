@@ -773,7 +773,7 @@ function iconMarkup(name, cls = "icon") {
     // context with its own Page Visibility state. Acting on it here
     // would call play()/pause() on the orphaned main-window iframe,
     // which can create double audio alongside the popout.
-    if (popoutActive) return;
+    if (popoutActive && popoutMode === "youtube") return;
 
     if (document.hidden) {
       // Tab going to background.
@@ -810,320 +810,64 @@ function iconMarkup(name, cls = "icon") {
   });
 
   /* ════════════════════════════════════════════
-     YouTube "ポップアウト" — background playback workaround
+     "ポップアウト" — background playback + always-visible remote
      ─────────────────────────────────────────
-     Problem: YouTube's embedded iframe shares the SAME Page Visibility
-     state as the tab it's embedded in (per the Page Visibility spec).
-     When the main PlatHub tab is backgrounded, the iframe sees itself as
-     hidden too, and — independent of anything PlatHub's own code does —
-     may stop producing sound. Because this happens inside YouTube's own
-     cross-origin iframe, PlatHub cannot detect or override that decision.
+     ONE popout window, ONE state machine, TWO modes:
 
-     Workaround: play the SAME video in a genuinely separate browsing
-     context, which has its OWN, independent Page Visibility state. Two
-     mechanisms, tried in order:
+       "youtube" — the popout hosts a real YT.Player and produces its
+         own audio, because YouTube's embedded iframe shares the SAME
+         Page Visibility state as whatever tab it's in — when the main
+         PlatHub tab is backgrounded, YouTube's own script may stop
+         producing sound, and PlatHub cannot detect or override that
+         (it happens inside YouTube's cross-origin iframe). A genuinely
+         separate window sidesteps this: independent Page Visibility.
+         The main window's own YouTube engine is paused while this mode
+         is active, to avoid double audio.
 
-       1. Document Picture-in-Picture (Chrome/Edge only) — an always-on-
-          top floating window that stays visible over other apps with no
-          window-management effort from the user. Preferred when available.
-       2. A plain popup window (window.open) — works in every browser,
-          but the user has to keep it visible themselves (it doesn't
-          float on top automatically).
+       "remote" — Podcast/<audio> and Spotify don't have YouTube's
+         background-pausing problem, so there's no need to host
+         playback elsewhere. This mode is a pure synced display +
+         remote control: audio keeps playing in the MAIN window the
+         whole time, and the popout just shows title/artist/progress
+         and relays control commands back via postMessage.
 
-     Both paths build a FRESH YT.Player inside the new context rather
-     than moving the existing, already-playing iframe there. This is a
-     deliberate choice: <video>/<audio> elements are documented to keep
-     playing when relocated in the DOM, but <iframe> elements are a
-     different kind of thing (a nested browsing context) and are well
-     documented to reload when moved — so moving the LIVE iframe risks
-     an unwanted restart-from-zero. A fresh embed seeked to the current
-     position sidesteps that risk entirely, at the cost of a brief
-     reload moment when popping out.
-
-     Either way, this is a handoff, not a mirrored sync: while active,
-     the MAIN window's YouTube engine is paused (to avoid double audio),
-     and the popped-out context becomes the source of truth for playback
-     until it's closed or the video ends there.
+     Critically, the window NEVER closes and reopens when the current
+     track's service changes — popout.html itself supports switching
+     between these two modes on a message, so the SAME window instance
+     just adapts in place. This keeps its on-screen position stable and
+     avoids any close/reopen flicker.
   ════════════════════════════════════════════ */
-  let popoutWindowRef = null;   // window.open() popup, OR the PiP Window instance
+  let popoutWindowRef = null;
   let popoutActive = false;
-  let popoutIsPip = false;
+  let popoutMode = null; // "youtube" | "remote" | null
 
-  // Remote-control popout (Podcast/Spotify) — a SEPARATE, simpler kind of
-  // popout from the YouTube one above. Audio keeps playing in the MAIN
-  // window the whole time (Podcast/<audio> and Spotify's SDK don't have
-  // YouTube's background-tab-pausing problem, so there's no need to host
-  // playback elsewhere) — this window is purely a synced display + a
-  // remote control that relays commands back to the main window.
-  let remotePopoutWindowRef = null;
-  let remotePopoutActive = false;
-
-  /** Single entry point for the one "ポップアウト" button — routes to the
-   *  right kind of popout (or closes whichever one is open) based on the
-   *  current track's service. */
+  /** Single entry point for the "ポップアウト" button. */
   function togglePopout() {
     if (popoutActive) { closeActivePopout(); return; }
-    if (remotePopoutActive) { closeRemotePopout(); return; }
-
     const t = getCurrentTrack();
     if (!t) return;
-    if (t.service === "youtube") {
-      toggleYoutubePopout();
-    } else {
-      openRemoteControlWindow(t);
-    }
+    openPopoutWindow(t);
   }
 
-  function toggleYoutubePopout() {
-    if (popoutActive) {
-      closeActivePopout();
-      return;
-    }
-
-    const t = getCurrentTrack();
-    if (!t || t.service !== "youtube") return;
-
-    // NOTE: Document Picture-in-Picture is NOT used here, even though the
-    // infrastructure for it exists below (openYoutubePip). Testing showed
-    // it's architecturally incompatible with YouTube embeds specifically:
-    // YouTube now requires a Referer header to identify the embedding page
-    // (see https://developers.google.com/youtube/terms/required-minimum-functionality),
-    // but a Document PiP window's document can never be navigated (per
-    // spec) — it stays at about:blank forever — so there is no real
-    // referring URL for the browser to derive a Referer from, no matter
-    // what origin/referrerpolicy values are set on the embedded iframe.
-    // This surfaces as YouTube's "Error 153: Video player configuration
-    // error" every time, regardless of environment. The popup window path
-    // below performs a real navigation and has a valid origin, so it
-    // doesn't hit this problem.
-    openYoutubePopupWindow(t);
-  }
-
-  function closeActivePopout() {
-    if (!popoutWindowRef) return;
-    try { popoutWindowRef.close(); } catch (_) {}
-    // 'pagehide' (PiP) / poll fallback (popup) handles the rest of cleanup.
-  }
-
-  /**
-   * Remote-control popout for Podcast/Spotify. Opens a small window that
-   * displays synced title/artist/progress/volume and relays control
-   * commands back — audio itself never leaves the main window, so there's
-   * no pausing/hiding needed here (unlike the YouTube popout).
-   */
-  function openRemoteControlWindow(t) {
+  function openPopoutWindow(t) {
+    const mode = t.service === "youtube" ? "youtube" : "remote";
     const badge = Services.META[t.service]?.label || t.service;
     const params = new URLSearchParams({
+      service: mode,
       title: t.title || "",
       artist: t.artist || "",
       badge,
       position: String(Math.floor(position)),
       duration: String(Math.floor(duration)),
       playing: playing ? "1" : "0",
-      vol: String(volume),
     });
-    const popup = window.open(
-      `remote.html?${params.toString()}`,
-      "plathub_remote",
-      "width=320,height=420,popup=1"
-    );
-    if (!popup) {
-      showToast("操作パネルを開けませんでした（ポップアップブロックの可能性があります）", { duration: 5000, icon: "warning" });
-      return;
+    if (mode === "youtube") {
+      params.set("v", t.sourceId);
+      params.set("vol", String(Math.min(1, volume * (appSettings.vol_youtube ?? 1))));
+    } else {
+      params.set("vol", String(volume));
     }
 
-    setTimeout(() => {
-      if (popup.closed) {
-        showToast("操作パネルが開けませんでした（ポップアップブロックの可能性があります）。ブラウザのアドレスバー付近に表示されるブロック通知をご確認ください。", { duration: 6000, icon: "warning" });
-        return;
-      }
-      remotePopoutWindowRef = popup;
-      remotePopoutActive = true;
-      renderPopoutButtonState();
-
-      const closedPoll = setInterval(() => {
-        if (!remotePopoutWindowRef || remotePopoutWindowRef.closed) {
-          clearInterval(closedPoll);
-          remotePopoutActive = false;
-          remotePopoutWindowRef = null;
-          renderPopoutButtonState();
-        }
-      }, 1000);
-    }, 250);
-  }
-
-  function closeRemotePopout() {
-    if (remotePopoutWindowRef) {
-      try { remotePopoutWindowRef.close(); } catch (_) {}
-    }
-    remotePopoutActive = false;
-    remotePopoutWindowRef = null;
-    renderPopoutButtonState();
-  }
-
-  /** Push the current playback state to the remote popout, if one is open. */
-  function pushRemoteState() {
-    if (!remotePopoutActive || !remotePopoutWindowRef || remotePopoutWindowRef.closed) return;
-    const t = getCurrentTrack();
-    if (!t) {
-      try {
-        remotePopoutWindowRef.postMessage({ source: "plathub-main", type: "noTrack" }, window.location.origin);
-      } catch (_) {}
-      return;
-    }
-    try {
-      remotePopoutWindowRef.postMessage({
-        source: "plathub-main",
-        type: "state",
-        title: t.title || "",
-        artist: t.artist || "",
-        badge: Services.META[t.service]?.label || t.service,
-        position, duration, playing, volume,
-      }, window.location.origin);
-    } catch (_) {}
-  }
-
-  window.addEventListener("message", (e) => {
-    if (e.origin !== window.location.origin) return;
-    const data = e.data;
-    if (!data || data.source !== "plathub-remote") return;
-
-    if (data.type === "ready") {
-      pushRemoteState();
-    } else if (data.type === "togglePlay") {
-      togglePlayPause();
-      pushRemoteState();
-    } else if (data.type === "seek") {
-      seekTo(data.position);
-      pushRemoteState();
-    } else if (data.type === "setVolume") {
-      setVolumeValue(data.volume);
-      pushRemoteState();
-    } else if (data.type === "next") {
-      skipNext();
-      pushRemoteState();
-    } else if (data.type === "prev") {
-      skipPrev();
-      pushRemoteState();
-    } else if (data.type === "closed") {
-      remotePopoutActive = false;
-      remotePopoutWindowRef = null;
-      renderPopoutButtonState();
-    }
-  });
-
-  /** Path 1: Document Picture-in-Picture (Chrome/Edge). */
-  async function openYoutubePip(t) {
-    const volYT = Math.min(1, volume * (appSettings.vol_youtube ?? 1));
-    const startPosition = Math.floor(position);
-
-    let pipWindow;
-    try {
-      pipWindow = await documentPictureInPicture.requestWindow({ width: 420, height: 280 });
-    } catch (e) {
-      showToast("Picture-in-Pictureを開けませんでした。別ウィンドウで開きます。", { duration: 4000, icon: "warning" });
-      openYoutubePopupWindow(t);
-      return;
-    }
-
-    // YouTube's embed requires a Referer header to identify the embedding
-    // page (missing it causes "Error 153: embedder.identity.missing.referrer").
-    // Since this window is populated via direct DOM injection rather than a
-    // normal navigation, its default referrer behavior isn't guaranteed —
-    // set an explicit policy up front, before anything else loads.
-    const referrerMeta = pipWindow.document.createElement("meta");
-    referrerMeta.name = "referrer";
-    referrerMeta.content = "strict-origin-when-cross-origin";
-    pipWindow.document.head.appendChild(referrerMeta);
-
-    const style = pipWindow.document.createElement("style");
-    style.textContent = `
-      * { margin:0; padding:0; box-sizing:border-box; }
-      html, body { background:#000; height:100%; overflow:hidden; }
-      #pipHost { width:100%; height:100%; }
-      #pipHost iframe { width:100%; height:100%; border:none; }
-    `;
-    pipWindow.document.head.appendChild(style);
-
-    const hostDiv = pipWindow.document.createElement("div");
-    hostDiv.id = "pipHost";
-    pipWindow.document.body.appendChild(hostDiv);
-
-    // Build the <iframe> ourselves (with referrerpolicy/allow set before
-    // insertion) rather than letting YT.Player create it — same reasoning
-    // as youtube-engine.js: attributes set AFTER the player is ready are
-    // too late, since the initial embed request has already gone out.
-    const params = new URLSearchParams({
-      enablejsapi: "1",
-      autoplay: "1",
-      controls: "1",
-      rel: "0",
-      playsinline: "1",
-      // NOTE: pipWindow.location.origin is unreliable here — the PiP
-      // window is an about:blank document populated via direct DOM
-      // injection (never actually navigated; the spec explicitly says
-      // Document PiP windows "cannot be navigated"), so its own origin
-      // serializes to the string "null". Use the REAL opener page's
-      // origin instead, since that's PlatHub's actual, valid origin —
-      // passing origin=null was almost certainly the cause of Error 153.
-      origin: window.location.origin,
-    });
-    const iframeEl = pipWindow.document.createElement("iframe");
-    iframeEl.src = `https://www.youtube.com/embed/${t.sourceId}?${params.toString()}`;
-    iframeEl.width = "100%";
-    iframeEl.height = "100%";
-    iframeEl.frameBorder = "0";
-    iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
-    iframeEl.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
-    hostDiv.appendChild(iframeEl);
-
-    // Load a FRESH copy of the YouTube IFrame API inside the PiP window's
-    // own document, so it gets its own independent `YT` global bound to
-    // that window — avoids any cross-window API-object ambiguity.
-    pipWindow.onYouTubeIframeAPIReady = () => {
-      new pipWindow.YT.Player(iframeEl, {
-        events: {
-          onReady(e) {
-            try { e.target.setVolume(Math.round(volYT * 100)); } catch (_) {}
-            if (startPosition > 0) { try { e.target.seekTo(startPosition, true); } catch (_) {} }
-            try { e.target.playVideo(); } catch (_) {}
-          },
-          onStateChange(e) {
-            if (e.data === pipWindow.YT.PlayerState.ENDED) {
-              closeActivePopout();
-              handleTrackEnded();
-            }
-          },
-          onError(e) {
-            showToast(`PiP側で再生エラーが発生しました（コード ${e.data}）`, { duration: 5000, icon: "warning" });
-          },
-        },
-      });
-    };
-    const script = pipWindow.document.createElement("script");
-    script.src = "https://www.youtube.com/iframe_api";
-    pipWindow.document.body.appendChild(script);
-
-    pipWindow.addEventListener("pagehide", () => {
-      handlePopoutClosed(null); // exact resume position isn't tracked back from PiP; safe default
-    });
-
-    popoutWindowRef = pipWindow;
-    popoutActive = true;
-    popoutIsPip = true;
-    pauseMainForPopout();
-  }
-
-  /** Path 2: plain popup window (window.open) — universal fallback. */
-  function openYoutubePopupWindow(t) {
-    const volYT = Math.min(1, volume * (appSettings.vol_youtube ?? 1));
-    const params = new URLSearchParams({
-      v: t.sourceId,
-      t: String(Math.floor(position)),
-      vol: String(volYT),
-      title: t.title || "",
-      artist: t.artist || "",
-    });
     const popup = window.open(
       `popout.html?${params.toString()}`,
       "plathub_popout",
@@ -1134,26 +878,21 @@ function iconMarkup(name, cls = "icon") {
       return;
     }
 
-    // Some browsers return a non-null Window synchronously from
-    // window.open() even when a popup blocker will silently close it a
-    // moment later, without ever actually showing it. Verify it's still
-    // genuinely open a beat later, BEFORE committing to popoutActive
-    // (hiding the main video, disabling controls, etc.) — otherwise
-    // PlatHub's state gets stuck believing a popout is active/visible
-    // when nothing ever actually appeared on screen.
+    // Some browsers return a non-null Window synchronously even when a
+    // popup blocker will silently close it a moment later. Verify it's
+    // still genuinely open a beat later, BEFORE committing to
+    // popoutActive (hiding the main video, pausing its engine, etc.).
     setTimeout(() => {
       if (popup.closed) {
         showToast("ポップアウトウィンドウが開けませんでした（ポップアップブロックの可能性があります）。ブラウザのアドレスバー付近に表示されるブロック通知をご確認ください。", { duration: 6000, icon: "warning" });
         return;
       }
-
       popoutWindowRef = popup;
       popoutActive = true;
-      popoutIsPip = false;
-      pauseMainForPopout();
+      popoutMode = mode;
+      if (mode === "youtube") pauseMainForPopout();
+      else renderPopoutButtonState();
 
-      // Fallback in case the 'closed' message doesn't arrive (e.g. the
-      // popup was closed in a way that skips beforeunload in some browsers).
       const closedPoll = setInterval(() => {
         if (!popoutWindowRef || popoutWindowRef.closed) {
           clearInterval(closedPoll);
@@ -1163,8 +902,15 @@ function iconMarkup(name, cls = "icon") {
     }, 250);
   }
 
+  function closeActivePopout() {
+    if (!popoutWindowRef) return;
+    try { popoutWindowRef.close(); } catch (_) {}
+    // 'closed' message / poll fallback handles the rest of cleanup.
+  }
+
   function pauseMainForPopout() {
-    // Pause the main window's copy so we don't hear the same audio twice.
+    // Pause the main window's own YouTube copy so we don't hear the
+    // same audio twice while the popout hosts it instead.
     YouTubeEngine.pause();
     playing = false;
     renderTransport();
@@ -1176,67 +922,109 @@ function iconMarkup(name, cls = "icon") {
 
   function handlePopoutClosed(finalPosition) {
     if (!popoutActive) return;
+    const wasYoutube = popoutMode === "youtube";
     popoutActive = false;
-    popoutIsPip = false;
+    popoutMode = null;
     popoutWindowRef = null;
-    if (finalPosition != null && finalPosition > 0) {
+    if (wasYoutube && finalPosition != null && finalPosition > 0) {
       position = finalPosition;
       try { YouTubeEngine.seekTo(finalPosition); } catch (_) {}
     }
-    renderPlayerPanels();  // restores the video area, hides the "playing elsewhere" note
+    renderPlayerPanels();  // restores the main video area if it was hidden
     renderPopoutButtonState();
-    showToast("ポップアウトを終了しました。メイン画面から再生を続けられます。");
+    showToast("ポップアウトを終了しました。");
   }
 
   function renderPopoutButtonState() {
     [ppDesktop, ppMobile].forEach((pp) => {
       if (!pp || !pp.popoutBtn) return;
-      const anyActive = popoutActive || remotePopoutActive;
-      pp.popoutBtn.classList.toggle("active", anyActive);
+      pp.popoutBtn.classList.toggle("active", popoutActive);
       const label = pp.popoutBtn.querySelector("span");
       if (!label) return;
-      if (popoutActive) label.textContent = popoutIsPip ? "PiP再生中…" : "再生中…";
-      else if (remotePopoutActive) label.textContent = "操作パネル表示中…";
+      if (popoutMode === "youtube") label.textContent = "再生中…";
+      else if (popoutMode === "remote") label.textContent = "操作パネル表示中…";
       else label.textContent = "ポップアウト";
     });
   }
 
   /**
-   * Advances PlatHub's "now playing" state to `track` and routes actual
-   * playback to the ALREADY-OPEN popout window (via loadVideoById, so it
-   * keeps playing continuously) instead of loading it into the main
-   * window's own iframe. Mirrors the relevant parts of playTrack() —
-   * state bookkeeping, UI refresh, Media Session — without the parts that
-   * would load into (and thus create double audio with) the main iframe,
-   * or close the very popout this is meant to keep alive.
+   * Keeps an ALREADY-OPEN popout adapted to `track` — switching between
+   * "host YouTube video" and "remote control" mode as needed via a
+   * message to the SAME window (popout.html supports both modes and
+   * switches on command; see its 'enterYoutube'/'enterRemote' handlers).
+   * Does nothing if no popout is open. Called from playTrack() and from
+   * the popout's own ended/next/prev handlers so that an open popout
+   * survives every kind of track transition, not just some.
    */
-  function advancePopoutToTrack(track) {
+  function syncPopoutToCurrentTrack(track) {
+    if (!popoutActive || !popoutWindowRef || popoutWindowRef.closed) return;
+    if (!track) { closeActivePopout(); return; }
+
+    const needsYoutube = track.service === "youtube";
+    const badge = Services.META[track.service]?.label || track.service;
+    const wasYoutube = popoutMode === "youtube";
+
+    if (needsYoutube) {
+      popoutMode = "youtube";
+      try {
+        popoutWindowRef.postMessage({
+          source: "plathub-main", type: "enterYoutube",
+          videoId: track.sourceId, title: track.title || "", artist: track.artist || "",
+          badge, position: 0, volume: Math.min(1, volume * (appSettings.vol_youtube ?? 1)),
+          autoplay: true,
+        }, window.location.origin);
+      } catch (_) {}
+      if (!wasYoutube) pauseMainForPopout();
+      else { renderPlayerPanels(); renderPopoutButtonState(); }
+    } else {
+      popoutMode = "remote";
+      try {
+        popoutWindowRef.postMessage({
+          source: "plathub-main", type: "enterRemote",
+          title: track.title || "", artist: track.artist || "", badge,
+          position, duration, playing, volume,
+        }, window.location.origin);
+      } catch (_) {}
+      if (wasYoutube) renderPlayerPanels(); // restore main's own video area / re-enable its controls
+      renderPopoutButtonState();
+    }
+  }
+
+  /** Push current playback state to an open popout that's in remote mode. */
+  function pushPopoutState(track) {
+    if (!popoutActive || popoutMode !== "remote" || !popoutWindowRef || popoutWindowRef.closed) return;
+    const t = track || getCurrentTrack();
+    if (!t) {
+      try { popoutWindowRef.postMessage({ source: "plathub-main", type: "noTrack" }, window.location.origin); } catch (_) {}
+      return;
+    }
+    try {
+      popoutWindowRef.postMessage({
+        source: "plathub-main", type: "state",
+        title: t.title || "", artist: t.artist || "",
+        badge: Services.META[t.service]?.label || t.service,
+        position, duration, playing, volume,
+      }, window.location.origin);
+    } catch (_) {}
+  }
+
+  /**
+   * Updates PlatHub's OWN "now playing" bookkeeping (current track id,
+   * owning playlist, transport reset, UI refresh, Media Session) for
+   * `track`, WITHOUT touching any playback engine — the caller decides
+   * separately whether the popout should host it or the main window's
+   * own engine should. Used specifically for the "next track chosen by
+   * the popout itself" paths (ended/requestNext/requestPrev), which
+   * need this same bookkeeping playTrack() does, but must NOT trigger
+   * playTrack()'s own popup-closing / main-engine-loading side effects.
+   */
+  function advanceStateForTrack(track) {
     currentTrackId = track.id;
     playing = true;
     position = 0; duration = 0; playerError = "";
     pendingNextTrack = null;
-
-    const owningPlaylist = state.playlists.find(
-      (p) => p.tracks.some((t) => t.id === track.id)
-    );
+    const owningPlaylist = state.playlists.find((p) => p.tracks.some((t) => t.id === track.id));
     if (owningPlaylist) playingPlaylistId = owningPlaylist.id;
-    // Don't force the view to follow, same as normal auto-advance —
-    // the user may be deliberately browsing a different playlist.
-
-    if (popoutWindowRef && !popoutWindowRef.closed) {
-      const volYT = Math.min(1, volume * (appSettings.vol_youtube ?? 1));
-      try {
-        popoutWindowRef.postMessage({
-          source: "plathub-main",
-          type: "loadTrack",
-          videoId: track.sourceId,
-          volume: volYT,
-          title: track.title,
-          artist: track.artist || "",
-        }, window.location.origin);
-      } catch (_) {}
-    }
-
     renderAll();
     updateMediaSession(track);
   }
@@ -1249,50 +1037,39 @@ function iconMarkup(name, cls = "icon") {
     if (data.type === "closed") {
       handlePopoutClosed(data.position);
     } else if (data.type === "ended") {
-      // The popped-out video finished. Figure out what's next exactly
-      // once (nextTrack() advances the shuffle cursor as a side effect,
-      // so it must not be called more than once per "ended" event).
+      // Fires only in youtube mode. Figure out what's next exactly once
+      // (nextTrack() advances the shuffle cursor as a side effect).
       const next = nextTrack(false);
       if (!next) {
-        // End of playlist (repeat off, not radio mode) — stop.
         closeActivePopout();
-        playing = false;
-        position = 0;
+        playing = false; position = 0;
         renderTransport();
         updateMediaSessionPlaybackState();
-      } else if (next.service === "youtube") {
-        // Keep playing continuously in the SAME popout window.
-        advancePopoutToTrack(next);
+        return;
+      }
+      if (next.service === "youtube") {
+        advanceStateForTrack(next);
+        syncPopoutToCurrentTrack(next);
       } else {
-        // Next track uses a different engine (Podcast/Spotify/etc.) —
-        // the popout can't help with that, so close it and resume
-        // normal playback in the main window. closeActivePopout() (not
-        // handlePopoutClosed) is used here because it actually calls
-        // .close() — handlePopoutClosed only resets state on the
-        // assumption the window is already closing, which would also
-        // wrongly short-circuit playTrack()'s own popup-closing check.
-        closeActivePopout();
+        // Non-YouTube tracks always play via the main window's own
+        // engine — playTrack() handles that AND keeps the popout (now
+        // switching to remote mode) synced rather than closing it.
         playTrack(next, { syncView: false });
       }
     } else if (data.type === "requestNext") {
-      // User pressed Next inside the popout — same lookup as skipNext().
       const next = nextTrack(true);
       if (!next) return;
       if (next.service === "youtube") {
-        advancePopoutToTrack(next);
+        advanceStateForTrack(next);
+        syncPopoutToCurrentTrack(next);
       } else {
-        closeActivePopout();
         playTrack(next, { syncView: false });
       }
     } else if (data.type === "requestPrev") {
-      // User pressed Prev inside the popout — same "restart if far into
-      // the track, else go to the actual previous track" as skipPrev().
       if (typeof data.position === "number" && data.position > 3) {
-        if (popoutWindowRef && !popoutWindowRef.closed) {
-          try {
-            popoutWindowRef.postMessage({ source: "plathub-main", type: "seekLocal" }, window.location.origin);
-          } catch (_) {}
-        }
+        try {
+          popoutWindowRef.postMessage({ source: "plathub-main", type: "seekLocal" }, window.location.origin);
+        } catch (_) {}
         position = 0;
         renderTransport();
         return;
@@ -1300,18 +1077,26 @@ function iconMarkup(name, cls = "icon") {
       const prev = computePrevTrack();
       if (!prev) return;
       if (prev.service === "youtube") {
-        advancePopoutToTrack(prev);
+        advanceStateForTrack(prev);
+        syncPopoutToCurrentTrack(prev);
       } else {
-        closeActivePopout();
         playTrack(prev, { syncView: false });
       }
+    } else if (data.type === "togglePlay") {
+      togglePlayPause();
+      pushPopoutState();
+    } else if (data.type === "seek") {
+      seekTo(data.position);
+      pushPopoutState();
+    } else if (data.type === "setVolume") {
+      setVolumeValue(data.volume);
+      pushPopoutState();
     } else if (data.type === "position") {
-      // Keep the main window's (visually inert, but still informative)
-      // progress bar and play-state in sync with what's actually
-      // audible in the popout. Also defensively re-assert the "video
-      // hidden, main engine paused" state on every report — this
-      // self-heals within 500ms if anything manages to disturb it.
-      if (popoutActive) {
+      // Youtube-mode only: keep the main window's (visually inert, but
+      // still informative) progress bar in sync, and defensively
+      // re-assert "main engine paused" on every report — self-heals
+      // within 500ms if anything manages to disturb it.
+      if (popoutActive && popoutMode === "youtube") {
         position = data.position || 0;
         duration = data.duration || 0;
         playing = !!data.playing;
@@ -1366,16 +1151,6 @@ function iconMarkup(name, cls = "icon") {
   ════════════════════════════════════════════ */
 
   function playTrack(track, { syncView = true } = {}) {
-    // If a YouTube popout is active, it's tied to the PREVIOUS track —
-    // close it now that playback is moving on, so it doesn't keep playing
-    // a mismatched video in the background.
-    if (popoutActive && popoutWindowRef && !popoutWindowRef.closed) {
-      popoutWindowRef.close();
-      popoutActive = false;
-      popoutIsPip = false;
-      popoutWindowRef = null;
-    }
-
     currentTrackId = track.id;
     playing = true;
     position = 0; duration = 0; playerError = "";
@@ -1397,10 +1172,19 @@ function iconMarkup(name, cls = "icon") {
     renderAll();
     updateMediaSession(track);
 
-    requestAnimationFrame(() => {
-      const hostEl = getVisibleYtHost();
-      loadCurrentTrackIntoEngine(hostEl);
-    });
+    // If a popout is open, keep it adapted to this track (switching
+    // modes as needed) rather than closing it. When it's about to host
+    // this YouTube track itself, skip loading into the main window's
+    // own iframe too — the popout is the one producing audio for it.
+    const popoutWillHostThis = popoutActive && track.service === "youtube";
+    if (popoutActive) syncPopoutToCurrentTrack(track);
+
+    if (!popoutWillHostThis) {
+      requestAnimationFrame(() => {
+        const hostEl = getVisibleYtHost();
+        loadCurrentTrackIntoEngine(hostEl);
+      });
+    }
   }
 
   function togglePlayPause() {
@@ -2793,7 +2577,7 @@ function iconMarkup(name, cls = "icon") {
     if (ppMobile) renderTransportInto(ppMobile);
     renderTrackListActiveMarker();
     updateMediaSessionPlaybackState();
-    pushRemoteState();
+    pushPopoutState();
   }
 
   // Persistent dbMeta children — created once and reused, so their state

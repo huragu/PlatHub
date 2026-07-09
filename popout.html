@@ -14,7 +14,6 @@
     --text: #F5F5F0;
     --text-dim: #888888;
     --text-faint: #555555;
-    --border: #1e1e2a;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -38,7 +37,7 @@
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
   }
   #header .dot {
     width: 6px; height: 6px; border-radius: 50%;
@@ -47,6 +46,17 @@
     animation: pulse 2s ease-in-out infinite;
   }
   @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+  #playerHost {
+    width: 100%;
+    aspect-ratio: 16/9;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #000;
+    flex-shrink: 0;
+  }
+  #playerHost iframe { width: 100%; height: 100%; border: none; }
+  #playerHost[hidden] { display: none; }
 
   #trackInfo {
     flex: 1;
@@ -57,8 +67,8 @@
     text-align: center;
     min-height: 0;
     padding: 0 4px;
-    margin-top: 12px;
   }
+  #playerHost:not([hidden]) + #trackInfo { flex: 0 0 auto; margin-top: 12px; }
   #trackBadge {
     font-family: 'Space Grotesk', sans-serif;
     font-size: 10px;
@@ -169,15 +179,6 @@
   #volumeRow svg { width: 15px; height: 15px; color: var(--text-faint); flex-shrink: 0; }
   #volumeSlider { flex: 1; }
 
-  #playerHost {
-    width: 100%;
-    aspect-ratio: 16/9;
-    border-radius: 10px;
-    overflow: hidden;
-    background: #000;
-    flex-shrink: 0;
-  }
-  #playerHost iframe { width: 100%; height: 100%; border: none; }
   #status {
     font-size: 10px;
     color: var(--text-faint);
@@ -193,13 +194,13 @@
 <div id="container">
   <div id="header">
     <span class="dot"></span>
-    <span>PlatHub ポップアウト再生中</span>
+    <span id="headerText">PlatHub ポップアウト再生中</span>
   </div>
 
-  <div id="playerHost"></div>
+  <div id="playerHost" hidden></div>
 
   <div id="trackInfo">
-    <div id="trackBadge">YouTube</div>
+    <div id="trackBadge">—</div>
     <div id="trackTitle">読み込み中…</div>
     <div id="trackArtist"></div>
   </div>
@@ -227,7 +228,7 @@
     <input type="range" id="volumeSlider" min="0" max="100" value="80">
   </div>
 
-  <div id="status">読み込み中…</div>
+  <div id="status"></div>
 </div>
 
 <script src="https://www.youtube.com/iframe_api"></script>
@@ -235,16 +236,32 @@
 (() => {
   "use strict";
 
+  /* ════════════════════════════════════════════
+     Unified popout: hosts YouTube playback locally when the current
+     track is YouTube, and acts as a pure remote-control (relaying
+     commands, audio stays in the main window) for everything else.
+     The window itself NEVER closes/reopens when the track's service
+     changes — only its internal mode switches, on a message from the
+     main window. This keeps the window's on-screen position stable
+     and avoids any "disappears and reappears" flicker.
+  ════════════════════════════════════════════ */
+
   const params = new URLSearchParams(window.location.search);
-  const videoId = params.get("v");
-  const startSeconds = parseFloat(params.get("t") || "0") || 0;
-  const initialVolume = Math.min(1, Math.max(0, parseFloat(params.get("vol") || "1")));
+  let mode = params.get("service") === "youtube" ? "youtube" : "remote";
+
   let title = params.get("title") || "";
   let artist = params.get("artist") || "";
+  let badge = params.get("badge") || "";
+  let duration = parseFloat(params.get("duration") || "0") || 0;
+  let position = parseFloat(params.get("position") || "0") || 0;
+  let playingRemote = params.get("playing") === "1"; // only meaningful in remote mode
+  const initialVolume = Math.min(1, Math.max(0, parseFloat(params.get("vol") || "1")));
 
-  const statusEl = document.getElementById("status");
+  const headerText = document.getElementById("headerText");
+  const playerHostEl = document.getElementById("playerHost");
   const titleEl = document.getElementById("trackTitle");
   const artistEl = document.getElementById("trackArtist");
+  const badgeEl = document.getElementById("trackBadge");
   const progressSlider = document.getElementById("progressSlider");
   const curTimeEl = document.getElementById("curTime");
   const durTimeEl = document.getElementById("durTime");
@@ -253,6 +270,7 @@
   const volumeSlider = document.getElementById("volumeSlider");
   const prevBtn = document.getElementById("prevBtn");
   const nextBtn = document.getElementById("nextBtn");
+  const statusEl = document.getElementById("status");
 
   const ICON_PLAY = '<path d="M8 5v14l11-7z"/>';
   const ICON_PAUSE = '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>';
@@ -263,28 +281,6 @@
     const sec = Math.floor(s % 60).toString().padStart(2, "0");
     return `${m}:${sec}`;
   }
-
-  function setTitle(t) {
-    title = t;
-    titleEl.textContent = t || "";
-    document.title = t ? `▶ ${t} — PlatHub` : "PlatHub — ポップアウト";
-  }
-  function setArtist(a) {
-    artist = a;
-    artistEl.textContent = a || "";
-  }
-  setTitle(title);
-  setArtist(artist);
-
-  if (!videoId) {
-    statusEl.textContent = "動画情報が見つかりませんでした。このウィンドウは閉じてください。";
-  }
-
-  let player = null;
-  let ready = false;
-  let seeking = false;      // true while the user is dragging the progress handle
-  let lastDuration = 0;
-
   function post(type, extra) {
     try {
       if (window.opener && !window.opener.closed) {
@@ -292,19 +288,51 @@
       }
     } catch (_) {}
   }
+  function setTitle(t) {
+    title = t;
+    titleEl.textContent = t || "";
+    document.title = t ? `▶ ${t} — PlatHub` : "PlatHub — ポップアウト";
+  }
+  function setArtist(a) { artist = a; artistEl.textContent = a || ""; }
+  function setBadge(b) { badge = b; badgeEl.textContent = b || ""; }
+  function updatePlayIcon(isPlaying) { playIcon.innerHTML = isPlaying ? ICON_PAUSE : ICON_PLAY; }
 
-  function updatePlayIcon(isPlaying) {
-    playIcon.innerHTML = isPlaying ? ICON_PAUSE : ICON_PLAY;
+  let seeking = false;
+  function renderProgress(pos, dur) {
+    const pct = dur > 0 ? (pos / dur) * 1000 : 0;
+    progressSlider.value = pct;
+    progressSlider.style.background =
+      `linear-gradient(to right, var(--red) ${pct / 10}%, #2a2a3a ${pct / 10}%)`;
+    curTimeEl.textContent = formatTime(pos);
+    durTimeEl.textContent = formatTime(dur);
   }
 
-  window.onYouTubeIframeAPIReady = () => {
-    if (!videoId) return;
+  setTitle(title); setArtist(artist); setBadge(badge);
+  volumeSlider.value = Math.round(initialVolume * 100);
+  renderProgress(position, duration);
 
-    // Build the <iframe> ourselves (referrerpolicy/allow set before
-    // insertion — setting them after onReady is too late).
+  /* ════════════════════════════════════════════
+     YouTube hosting mode — a local YT.Player, created lazily the first
+     time we ever need it (either at startup if we start in youtube
+     mode, or later if the main window switches us into it).
+  ════════════════════════════════════════════ */
+  let player = null;
+  let apiReady = false;
+  let pendingEnterYoutube = null; // {videoId, ...} queued if API isn't ready yet
+
+  window.onYouTubeIframeAPIReady = () => {
+    apiReady = true;
+    if (pendingEnterYoutube) {
+      const args = pendingEnterYoutube;
+      pendingEnterYoutube = null;
+      reallyEnterYoutube(args);
+    }
+  };
+
+  function reallyEnterYoutube({ videoId, autoplayNow, seekSeconds, vol }) {
     const p = new URLSearchParams({
       enablejsapi: "1",
-      autoplay: "1",
+      autoplay: autoplayNow ? "1" : "0",
       controls: "0",
       rel: "0",
       playsinline: "1",
@@ -317,27 +345,20 @@
     iframeEl.frameBorder = "0";
     iframeEl.allow = "autoplay; encrypted-media; picture-in-picture";
     iframeEl.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
-    document.getElementById("playerHost").appendChild(iframeEl);
+    playerHostEl.innerHTML = "";
+    playerHostEl.appendChild(iframeEl);
 
     player = new YT.Player(iframeEl, {
       events: {
         onReady(e) {
-          ready = true;
-          try { e.target.setVolume(Math.round(initialVolume * 100)); } catch (_) {}
-          volumeSlider.value = Math.round(initialVolume * 100);
-          if (startSeconds > 0) {
-            try { e.target.seekTo(startSeconds, true); } catch (_) {}
-          }
-          try { e.target.playVideo(); } catch (_) {}
-          statusEl.textContent = "";
-          post("ready", {});
+          try { e.target.setVolume(Math.round((vol ?? initialVolume) * 100)); } catch (_) {}
+          if (seekSeconds > 0) { try { e.target.seekTo(seekSeconds, true); } catch (_) {} }
+          if (autoplayNow) { try { e.target.playVideo(); } catch (_) {} }
         },
         onStateChange(e) {
-          const isPlaying = e.data === YT.PlayerState.PLAYING;
-          updatePlayIcon(isPlaying);
-          if (e.data === YT.PlayerState.ENDED) {
-            post("ended", {});
-          }
+          if (mode !== "youtube") return;
+          updatePlayIcon(e.data === YT.PlayerState.PLAYING);
+          if (e.data === YT.PlayerState.ENDED) post("ended", {});
         },
         onError(e) {
           statusEl.textContent = `再生エラーが発生しました（コード ${e.data}）`;
@@ -345,100 +366,170 @@
         },
       },
     });
-  };
+  }
 
-  /* ── User-facing controls (act on the LOCAL player directly) ── */
+  /** Switch into (or stay in, with a new video) YouTube-hosting mode. */
+  function enterYoutubeMode({ videoId, title: t, artist: a, badge: b, position: pos, volume: vol, autoplay }) {
+    mode = "youtube";
+    playerHostEl.hidden = false;
+    headerText.textContent = "PlatHub ポップアウト再生中";
+    setTitle(t); setArtist(a); setBadge(b || "YouTube");
+    position = pos || 0; duration = 0; renderProgress(position, duration);
+
+    if (player && typeof player.loadVideoById === "function") {
+      try {
+        player.loadVideoById(videoId);
+        if (pos > 0) player.seekTo(pos, true);
+        if (typeof vol === "number") { player.setVolume(Math.round(vol * 100)); volumeSlider.value = Math.round(vol * 100); }
+      } catch (_) {}
+    } else if (apiReady) {
+      reallyEnterYoutube({ videoId, autoplayNow: autoplay !== false, seekSeconds: pos || 0, vol });
+    } else {
+      pendingEnterYoutube = { videoId, autoplayNow: autoplay !== false, seekSeconds: pos || 0, vol };
+    }
+  }
+
+  /** Switch into remote-control mode: hide video, stop reporting local
+   *  playback (nothing local to report), start relaying commands. */
+  function enterRemoteMode({ title: t, artist: a, badge: b, position: pos, duration: dur, playing, volume: vol }) {
+    mode = "remote";
+    playerHostEl.hidden = true;
+    headerText.textContent = "PlatHub 操作パネル — 音声はメイン画面側で再生されています";
+    if (player) { try { player.pauseVideo(); } catch (_) {} }
+    setTitle(t); setArtist(a); setBadge(b);
+    position = pos || 0; duration = dur || 0; playingRemote = !!playing;
+    updatePlayIcon(playingRemote);
+    if (typeof vol === "number") volumeSlider.value = Math.round(vol * 100);
+    renderProgress(position, duration);
+  }
+
+  /* ════════════════════════════════════════════
+     Controls — behavior depends on the current mode.
+  ════════════════════════════════════════════ */
   playPauseBtn.addEventListener("click", () => {
-    if (!ready || !player) return;
-    try {
-      if (player.getPlayerState() === YT.PlayerState.PLAYING) player.pauseVideo();
-      else player.playVideo();
-    } catch (_) {}
+    if (mode === "youtube") {
+      if (!player) return;
+      try {
+        if (player.getPlayerState() === YT.PlayerState.PLAYING) player.pauseVideo();
+        else player.playVideo();
+      } catch (_) {}
+    } else {
+      post("togglePlay", {});
+    }
   });
 
   volumeSlider.addEventListener("input", () => {
-    if (!ready || !player) return;
-    try { player.setVolume(+volumeSlider.value); } catch (_) {}
+    if (mode === "youtube") {
+      if (player) { try { player.setVolume(+volumeSlider.value); } catch (_) {} }
+    } else {
+      post("setVolume", { volume: +volumeSlider.value / 100 });
+    }
   });
 
   progressSlider.addEventListener("input", () => {
     seeking = true;
     const pct = +progressSlider.value / 1000;
-    curTimeEl.textContent = formatTime(pct * lastDuration);
+    const dur = mode === "youtube" ? (player?.getDuration?.() || 0) : duration;
+    curTimeEl.textContent = formatTime(pct * dur);
     progressSlider.style.background =
       `linear-gradient(to right, var(--red) ${pct * 100}%, #2a2a3a ${pct * 100}%)`;
   });
   progressSlider.addEventListener("change", () => {
-    if (ready && player && lastDuration > 0) {
-      const pct = +progressSlider.value / 1000;
-      try { player.seekTo(pct * lastDuration, true); } catch (_) {}
+    const pct = +progressSlider.value / 1000;
+    if (mode === "youtube") {
+      const dur = player?.getDuration?.() || 0;
+      if (player && dur > 0) { try { player.seekTo(pct * dur, true); } catch (_) {} }
+    } else {
+      post("seek", { position: pct * duration });
     }
     seeking = false;
   });
 
-  /* ── Next/Prev: playlist order (shuffle/repeat/radio) lives in the
-     main window, so ask it what should play and let it drive us via
-     the same 'loadTrack'/'seekLocal' messages used for auto-advance. ── */
+  // Next/Prev always defer to the main window — playlist order (shuffle/
+  // repeat/radio) lives there regardless of which mode we're in.
   nextBtn.addEventListener("click", () => post("requestNext", {}));
   prevBtn.addEventListener("click", () => {
-    let pos = 0;
-    try { pos = player ? (player.getCurrentTime() || 0) : 0; } catch (_) {}
+    let pos = mode === "youtube" ? (player?.getCurrentTime?.() || 0) : position;
     post("requestPrev", { position: pos });
   });
 
-  /* ── Progress + position reporting loop ── */
+  // Local progress/position reporting — only meaningful in youtube mode,
+  // since remote mode has no local playback to measure (its progress bar
+  // is driven entirely by 'state' messages from the main window instead).
   setInterval(() => {
-    if (!ready || !player) return;
+    if (mode !== "youtube" || !player) return;
     let pos = 0, dur = 0, isPlaying = false;
     try {
       pos = player.getCurrentTime() || 0;
       dur = player.getDuration() || 0;
       isPlaying = player.getPlayerState() === YT.PlayerState.PLAYING;
     } catch (_) { return; }
-
-    lastDuration = dur;
-    if (!seeking) {
-      const pct = dur > 0 ? (pos / dur) * 1000 : 0;
-      progressSlider.value = pct;
-      progressSlider.style.background =
-        `linear-gradient(to right, var(--red) ${pct / 10}%, #2a2a3a ${pct / 10}%)`;
-      curTimeEl.textContent = formatTime(pos);
-    }
-    durTimeEl.textContent = formatTime(dur);
+    if (!seeking) renderProgress(pos, dur);
     updatePlayIcon(isPlaying);
-
     post("position", { position: pos, duration: dur, playing: isPlaying });
   }, 500);
 
+  // Gently tick the remote-mode progress bar between syncs, so it moves
+  // smoothly rather than only jumping every ~500ms.
+  setInterval(() => {
+    if (mode !== "remote" || seeking || !playingRemote || duration <= 0) return;
+    position = Math.min(duration, position + 0.5);
+    renderProgress(position, duration);
+  }, 500);
+
   window.addEventListener("beforeunload", () => {
-    let position = 0;
-    try { position = player ? (player.getCurrentTime() || 0) : 0; } catch (_) {}
-    post("closed", { position });
+    let pos = mode === "youtube" ? (player?.getCurrentTime?.() || 0) : position;
+    post("closed", { position: pos });
   });
 
-  /* ── Commands from the main window ── */
+  /* ════════════════════════════════════════════
+     Commands from the main window
+  ════════════════════════════════════════════ */
   window.addEventListener("message", (e) => {
     if (e.origin !== window.location.origin) return;
     const data = e.data;
     if (!data || data.source !== "plathub-main") return;
 
-    if (data.type === "loadTrack" && player) {
-      try {
-        player.loadVideoById(data.videoId);
-        if (typeof data.volume === "number") {
-          player.setVolume(Math.round(data.volume * 100));
-          volumeSlider.value = Math.round(data.volume * 100);
-        }
-      } catch (_) {}
-      setTitle(data.title || "");
-      setArtist(data.artist || "");
-    } else if (data.type === "seekLocal" && player) {
-      // "Restart current track" case for requestPrev (position was
-      // already > a few seconds, so the main window just wants a
-      // restart rather than a genuine previous-track change).
+    if (data.type === "enterYoutube") {
+      enterYoutubeMode(data);
+    } else if (data.type === "enterRemote") {
+      enterRemoteMode(data);
+    } else if (data.type === "state" && mode === "remote") {
+      if (typeof data.title === "string") setTitle(data.title);
+      if (typeof data.artist === "string") setArtist(data.artist);
+      if (typeof data.badge === "string") setBadge(data.badge);
+      if (typeof data.position === "number") position = data.position;
+      if (typeof data.duration === "number") duration = data.duration;
+      if (typeof data.playing === "boolean") { playingRemote = data.playing; updatePlayIcon(playingRemote); }
+      if (typeof data.volume === "number") volumeSlider.value = Math.round(data.volume * 100);
+      if (!seeking) renderProgress(position, duration);
+    } else if (data.type === "seekLocal" && mode === "youtube" && player) {
       try { player.seekTo(0, true); } catch (_) {}
     }
   });
+
+  // If we're starting in youtube mode, kick off the player as soon as the
+  // API is ready (mirrors what enterYoutubeMode would do, but for the
+  // very first load rather than a later mode switch).
+  if (mode === "youtube") {
+    playerHostEl.hidden = false;
+    const videoId = params.get("v");
+    if (videoId) {
+      const kickoff = () => reallyEnterYoutube({
+        videoId, autoplayNow: true,
+        seekSeconds: position, vol: initialVolume,
+      });
+      if (apiReady) kickoff(); else pendingEnterYoutube = {
+        videoId, autoplayNow: true, seekSeconds: position, vol: initialVolume,
+      };
+    }
+  } else {
+    playerHostEl.hidden = true;
+    headerText.textContent = "PlatHub 操作パネル — 音声はメイン画面側で再生されています";
+    updatePlayIcon(playingRemote);
+  }
+
+  post("ready", {});
 })();
 </script>
 </body>
