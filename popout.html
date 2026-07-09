@@ -238,6 +238,8 @@
 </div>
 
 <script src="https://www.youtube.com/iframe_api"></script>
+<script src="js/spotify-auth.js"></script>
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
 <script>
 (() => {
   "use strict";
@@ -253,7 +255,8 @@
   ════════════════════════════════════════════ */
 
   const params = new URLSearchParams(window.location.search);
-  let mode = params.get("service") === "youtube" ? "youtube" : "remote";
+  const initialService = params.get("service") || "remote";
+  let mode = (initialService === "youtube" || initialService === "spotify") ? initialService : "remote";
 
   let title = params.get("title") || "";
   let artist = params.get("artist") || "";
@@ -335,6 +338,17 @@
     }
   };
 
+  // Spotify SDK ready — must be defined before the SDK script executes
+  // (same requirement as spotify-engine.js). If a track was queued
+  // before the SDK finished loading, this is what actually starts it.
+  // (No separate "already loaded" branch needed: the initial-kickoff
+  // logic further down calls ensureSpotifyPlayer() directly, which
+  // already handles the SDK being ready by that point on its own —
+  // adding a second path here caused a duplicate connect() call.)
+  window.onSpotifyWebPlaybackSDKReady = () => {
+    if (spPendingUri) ensureSpotifyPlayer();
+  };
+
   function reallyEnterYoutube({ videoId, autoplayNow, seekSeconds, vol }) {
     const p = new URLSearchParams({
       enablejsapi: "1",
@@ -395,6 +409,135 @@
     }
   }
 
+  /* ════════════════════════════════════════════
+     Spotify hosting mode — mirrors spotify-engine.js closely, but runs
+     HERE (in the popout) instead of the main window. This exists
+     specifically because Spotify's Web Playback SDK is documented (and
+     widely reported, even on open.spotify.com itself) to stall/stop
+     advancing tracks when its HOSTING TAB is backgrounded — the same
+     general class of Chromium background-tab restriction that affects
+     YouTube's iframe, just hitting a different underlying mechanism.
+     Hosting the SDK player here instead keeps it in an always-visible
+     window, sidestepping the problem the same way the YouTube path does.
+
+     SpotifyAuth's tokens live in sessionStorage, which IS available here
+     — window.open() copies the opener's sessionStorage into the new
+     window at open time, so no separate login is needed.
+  ════════════════════════════════════════════ */
+  let spPlayer = null;
+  let spReady = false;
+  let spDeviceId = null;
+  let spPendingUri = null;
+  let spPendingAutoplay = false;
+  let spEndFired = false;
+  let spPrevPlaying = false;
+  let spCurrentUri = null;
+
+  function ensureSpotifyPlayer() {
+    if (spPlayer) {
+      // Already have a player instance. If it's not currently connected
+      // (can happen if Spotify's connection drops), actively reconnect
+      // rather than silently doing nothing — see the same fix applied
+      // to spotify-engine.js's init() for the full reasoning.
+      if (!spReady) { try { spPlayer.connect(); } catch (_) {} }
+      return;
+    }
+    if (!(window.Spotify && window.Spotify.Player)) return; // SDK not loaded yet; onSpotifyWebPlaybackSDKReady will retry
+
+    spPlayer = new Spotify.Player({
+      name: "PlatHub (ポップアウト)",
+      getOAuthToken: async (cb) => {
+        const token = await SpotifyAuth.getValidAccessToken();
+        cb(token || "");
+      },
+      volume: initialVolume,
+    });
+
+    spPlayer.addListener("ready", ({ device_id }) => {
+      spDeviceId = device_id;
+      spReady = true;
+      if (spPendingUri) {
+        const uri = spPendingUri;
+        spPendingUri = null;
+        playSpotifyUri(uri, spPendingAutoplay);
+      }
+    });
+    spPlayer.addListener("not_ready", () => { spReady = false; });
+    spPlayer.addListener("initialization_error", ({ message }) => {
+      statusEl.textContent = `Spotify初期化エラー: ${message}`;
+    });
+    spPlayer.addListener("authentication_error", ({ message }) => {
+      statusEl.textContent = `Spotify認証エラー: ${message}`;
+    });
+    spPlayer.addListener("account_error", () => {
+      statusEl.textContent = "この機能はSpotify Premiumアカウントが必要です";
+    });
+    spPlayer.addListener("playback_error", ({ message }) => {
+      statusEl.textContent = `再生エラー: ${message}`;
+    });
+    spPlayer.addListener("player_state_changed", (state) => {
+      if (!state || mode !== "spotify") return;
+      updatePlayIcon(!state.paused);
+
+      // Same end-detection pattern as spotify-engine.js: the SDK has no
+      // clean "ended" event, so infer it from paused+position≈0 arriving
+      // right after a playing state, for the SAME track URI.
+      const trackUri = state.track_window?.current_track?.uri || null;
+      if (!spEndFired && spPrevPlaying && state.paused && state.position < 500 && trackUri === spCurrentUri) {
+        spEndFired = true;
+        spPrevPlaying = false;
+        post("ended", {});
+      } else {
+        spPrevPlaying = !state.paused;
+        if (trackUri && trackUri !== spCurrentUri) { spCurrentUri = trackUri; spEndFired = false; }
+      }
+    });
+
+    spPlayer.connect();
+  }
+
+  async function playSpotifyUri(uri, autoplay) {
+    const token = await SpotifyAuth.getValidAccessToken();
+    if (!token) { statusEl.textContent = "Spotifyにログインしていません"; return; }
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${spDeviceId}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ uris: [uri] }),
+      });
+      if (!res.ok && res.status !== 204) {
+        const body = await res.json().catch(() => ({}));
+        statusEl.textContent = `再生開始に失敗しました（${body.error?.message || res.status}）`;
+        post("error", { code: res.status });
+        return;
+      }
+      spCurrentUri = uri;
+      spEndFired = false;
+      if (!autoplay) { try { await spPlayer.pause(); } catch (_) {} }
+    } catch (e) {
+      statusEl.textContent = `再生開始に失敗しました: ${e.message}`;
+    }
+  }
+
+  /** Switch into (or stay in, with a new track) Spotify-hosting mode. */
+  function enterSpotifyMode({ trackId, spotifyType, title: t, artist: a, badge: b, position: pos, volume: vol, autoplay }) {
+    mode = "spotify";
+    playerHostEl.hidden = true; // audio only, no video area
+    headerText.textContent = "PlatHub ポップアウト再生中";
+    setTitle(t); setArtist(a); setBadge(b || "Spotify");
+    position = 0; duration = 0; renderProgress(position, duration);
+    if (typeof vol === "number") volumeSlider.value = Math.round(vol * 100);
+
+    const uri = `spotify:${spotifyType === "episode" ? "episode" : "track"}:${trackId}`;
+    if (spReady && spDeviceId) {
+      playSpotifyUri(uri, autoplay !== false);
+    } else {
+      spPendingUri = uri;
+      spPendingAutoplay = autoplay !== false;
+      ensureSpotifyPlayer();
+    }
+  }
+
   /** Switch into remote-control mode: hide video, stop reporting local
    *  playback (nothing local to report), start relaying commands. */
   function enterRemoteMode({ title: t, artist: a, badge: b, position: pos, duration: dur, playing, volume: vol }) {
@@ -419,6 +562,8 @@
         if (player.getPlayerState() === YT.PlayerState.PLAYING) player.pauseVideo();
         else player.playVideo();
       } catch (_) {}
+    } else if (mode === "spotify") {
+      if (spPlayer) { try { spPlayer.togglePlay(); } catch (_) {} }
     } else {
       post("togglePlay", {});
     }
@@ -427,6 +572,8 @@
   volumeSlider.addEventListener("input", () => {
     if (mode === "youtube") {
       if (player) { try { player.setVolume(+volumeSlider.value); } catch (_) {} }
+    } else if (mode === "spotify") {
+      if (spPlayer) { try { spPlayer.setVolume(+volumeSlider.value / 100); } catch (_) {} }
     } else {
       post("setVolume", { volume: +volumeSlider.value / 100 });
     }
@@ -445,6 +592,8 @@
     if (mode === "youtube") {
       const dur = player?.getDuration?.() || 0;
       if (player && dur > 0) { try { player.seekTo(pct * dur, true); } catch (_) {} }
+    } else if (mode === "spotify") {
+      if (spPlayer && duration > 0) { try { spPlayer.seek(Math.round(pct * duration * 1000)); } catch (_) {} }
     } else {
       post("seek", { position: pct * duration });
     }
@@ -459,7 +608,7 @@
     post("requestPrev", { position: pos });
   });
 
-  // Local progress/position reporting — only meaningful in youtube mode,
+  // Local progress/position reporting — youtube and spotify modes only,
   // since remote mode has no local playback to measure (its progress bar
   // is driven entirely by 'state' messages from the main window instead).
   setInterval(() => {
@@ -470,6 +619,18 @@
       dur = player.getDuration() || 0;
       isPlaying = player.getPlayerState() === YT.PlayerState.PLAYING;
     } catch (_) { return; }
+    if (!seeking) renderProgress(pos, dur);
+    updatePlayIcon(isPlaying);
+    post("position", { position: pos, duration: dur, playing: isPlaying });
+  }, 500);
+
+  setInterval(async () => {
+    if (mode !== "spotify" || !spPlayer) return;
+    const state = await spPlayer.getCurrentState().catch(() => null);
+    if (!state) return;
+    const pos = state.position / 1000;
+    const dur = state.duration / 1000;
+    const isPlaying = !state.paused;
     if (!seeking) renderProgress(pos, dur);
     updatePlayIcon(isPlaying);
     post("position", { position: pos, duration: dur, playing: isPlaying });
@@ -498,6 +659,8 @@
 
     if (data.type === "enterYoutube") {
       enterYoutubeMode(data);
+    } else if (data.type === "enterSpotify") {
+      enterSpotifyMode(data);
     } else if (data.type === "enterRemote") {
       enterRemoteMode(data);
     } else if (data.type === "state" && mode === "remote") {
@@ -509,14 +672,15 @@
       if (typeof data.playing === "boolean") { playingRemote = data.playing; updatePlayIcon(playingRemote); }
       if (typeof data.volume === "number") volumeSlider.value = Math.round(data.volume * 100);
       if (!seeking) renderProgress(position, duration);
-    } else if (data.type === "seekLocal" && mode === "youtube" && player) {
-      try { player.seekTo(0, true); } catch (_) {}
+    } else if (data.type === "seekLocal") {
+      if (mode === "youtube" && player) { try { player.seekTo(0, true); } catch (_) {} }
+      else if (mode === "spotify" && spPlayer) { try { spPlayer.seek(0); } catch (_) {} }
     }
   });
 
-  // If we're starting in youtube mode, kick off the player as soon as the
-  // API is ready (mirrors what enterYoutubeMode would do, but for the
-  // very first load rather than a later mode switch).
+  // If we're starting in youtube/spotify hosting mode, kick off local
+  // playback immediately (mirrors what enterYoutubeMode/enterSpotifyMode
+  // would do, but for the very first load rather than a later mode switch).
   if (mode === "youtube") {
     playerHostEl.hidden = false;
     const videoId = params.get("v");
@@ -528,6 +692,16 @@
       if (apiReady) kickoff(); else pendingEnterYoutube = {
         videoId, autoplayNow: true, seekSeconds: position, vol: initialVolume,
       };
+    }
+  } else if (mode === "spotify") {
+    playerHostEl.hidden = true;
+    headerText.textContent = "PlatHub ポップアウト再生中";
+    const trackId = params.get("trackid");
+    const spotifyType = params.get("spotifytype") === "episode" ? "episode" : "track";
+    if (trackId) {
+      spPendingUri = `spotify:${spotifyType}:${trackId}`;
+      spPendingAutoplay = true;
+      ensureSpotifyPlayer();
     }
   } else {
     playerHostEl.hidden = true;

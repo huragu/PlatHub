@@ -850,7 +850,8 @@ function iconMarkup(name, cls = "icon") {
   }
 
   function openPopoutWindow(t) {
-    const mode = t.service === "youtube" ? "youtube" : "remote";
+    const isSpotify = t.service === "spotify_track" || t.service === "spotify_episode";
+    const mode = t.service === "youtube" ? "youtube" : isSpotify ? "spotify" : "remote";
     const badge = Services.META[t.service]?.label || t.service;
     const params = new URLSearchParams({
       service: mode,
@@ -864,6 +865,10 @@ function iconMarkup(name, cls = "icon") {
     if (mode === "youtube") {
       params.set("v", t.sourceId);
       params.set("vol", String(Math.min(1, volume * (appSettings.vol_youtube ?? 1))));
+    } else if (mode === "spotify") {
+      params.set("trackid", t.sourceId);
+      params.set("spotifytype", t.service === "spotify_episode" ? "episode" : "track");
+      params.set("vol", String(Math.min(1, volume * (appSettings.vol_spotify ?? 1))));
     } else {
       params.set("vol", String(volume));
     }
@@ -890,7 +895,7 @@ function iconMarkup(name, cls = "icon") {
       popoutWindowRef = popup;
       popoutActive = true;
       popoutMode = mode;
-      if (mode === "youtube") pauseMainForPopout();
+      if (mode === "youtube" || mode === "spotify") pauseMainForPopout();
       else renderPopoutButtonState();
 
       const closedPoll = setInterval(() => {
@@ -909,9 +914,21 @@ function iconMarkup(name, cls = "icon") {
   }
 
   function pauseMainForPopout() {
-    // Pause the main window's own YouTube copy so we don't hear the
-    // same audio twice while the popout hosts it instead.
-    YouTubeEngine.pause();
+    // Stop the main window's own copy of whichever engine the popout is
+    // about to host, so we don't hear the same audio twice. Also
+    // defensively pause AudioEngine regardless of mode — playTrack()
+    // skips its normal engine-loading step entirely when the popout
+    // hosts a track, so a previously-active Podcast track wouldn't
+    // otherwise get stopped by anything else in that path.
+    if (popoutMode === "spotify") {
+      // Full disconnect (not just pause) — avoids leaving a stale
+      // "MIXCAST" device idling in the user's Spotify Connect device
+      // list while the popout's own device takes over playback.
+      try { SpotifyEngine.disconnect(); } catch (_) {}
+    } else {
+      YouTubeEngine.pause();
+    }
+    try { AudioEngine.pause(); } catch (_) {}
     playing = false;
     renderTransport();
     renderPlayerPanels();  // hides the video area, shows the "playing elsewhere" note, dims transport
@@ -949,23 +966,25 @@ function iconMarkup(name, cls = "icon") {
 
   /**
    * Keeps an ALREADY-OPEN popout adapted to `track` — switching between
-   * "host YouTube video" and "remote control" mode as needed via a
-   * message to the SAME window (popout.html supports both modes and
-   * switches on command; see its 'enterYoutube'/'enterRemote' handlers).
-   * Does nothing if no popout is open. Called from playTrack() and from
-   * the popout's own ended/next/prev handlers so that an open popout
+   * "host YouTube video", "host Spotify audio", and "remote control"
+   * (Podcast) modes as needed via a message to the SAME window
+   * (popout.html supports all three and switches on command). Does
+   * nothing if no popout is open. Called from playTrack() and from the
+   * popout's own ended/next/prev handlers so that an open popout
    * survives every kind of track transition, not just some.
    */
   function syncPopoutToCurrentTrack(track) {
     if (!popoutActive || !popoutWindowRef || popoutWindowRef.closed) return;
     if (!track) { closeActivePopout(); return; }
 
-    const needsYoutube = track.service === "youtube";
+    const isSpotify = track.service === "spotify_track" || track.service === "spotify_episode";
+    const targetMode = track.service === "youtube" ? "youtube" : isSpotify ? "spotify" : "remote";
     const badge = Services.META[track.service]?.label || track.service;
-    const wasYoutube = popoutMode === "youtube";
+    const wasHosted = popoutMode === "youtube" || popoutMode === "spotify";
+    const willHost = targetMode === "youtube" || targetMode === "spotify";
+    popoutMode = targetMode;
 
-    if (needsYoutube) {
-      popoutMode = "youtube";
+    if (targetMode === "youtube") {
       try {
         popoutWindowRef.postMessage({
           source: "plathub-main", type: "enterYoutube",
@@ -974,10 +993,17 @@ function iconMarkup(name, cls = "icon") {
           autoplay: true,
         }, window.location.origin);
       } catch (_) {}
-      if (!wasYoutube) pauseMainForPopout();
-      else { renderPlayerPanels(); renderPopoutButtonState(); }
+    } else if (targetMode === "spotify") {
+      try {
+        popoutWindowRef.postMessage({
+          source: "plathub-main", type: "enterSpotify",
+          trackId: track.sourceId, spotifyType: track.service === "spotify_episode" ? "episode" : "track",
+          title: track.title || "", artist: track.artist || "",
+          badge, position: 0, volume: Math.min(1, volume * (appSettings.vol_spotify ?? 1)),
+          autoplay: true,
+        }, window.location.origin);
+      } catch (_) {}
     } else {
-      popoutMode = "remote";
       try {
         popoutWindowRef.postMessage({
           source: "plathub-main", type: "enterRemote",
@@ -985,9 +1011,11 @@ function iconMarkup(name, cls = "icon") {
           position, duration, playing, volume,
         }, window.location.origin);
       } catch (_) {}
-      if (wasYoutube) renderPlayerPanels(); // restore main's own video area / re-enable its controls
-      renderPopoutButtonState();
     }
+
+    if (willHost && !wasHosted) pauseMainForPopout();
+    else if (!willHost && wasHosted) renderPlayerPanels(); // restore main's own controls/video area
+    else { renderPlayerPanels(); renderPopoutButtonState(); }
   }
 
   /** Push current playback state to an open popout that's in remote mode. */
@@ -1092,15 +1120,18 @@ function iconMarkup(name, cls = "icon") {
       setVolumeValue(data.volume);
       pushPopoutState();
     } else if (data.type === "position") {
-      // Youtube-mode only: keep the main window's (visually inert, but
-      // still informative) progress bar in sync, and defensively
-      // re-assert "main engine paused" on every report — self-heals
-      // within 500ms if anything manages to disturb it.
-      if (popoutActive && popoutMode === "youtube") {
+      // Youtube/Spotify hosting modes: keep the main window's (visually
+      // inert, but still informative) progress bar in sync. For YouTube
+      // specifically, also defensively re-assert "main engine paused" on
+      // every report — self-heals within 500ms if anything disturbs it.
+      // (Spotify doesn't need this: pauseMainForPopout() fully
+      // disconnects it rather than just pausing, so there's nothing left
+      // to re-pause.)
+      if (popoutActive && (popoutMode === "youtube" || popoutMode === "spotify")) {
         position = data.position || 0;
         duration = data.duration || 0;
         playing = !!data.playing;
-        try { YouTubeEngine.pause(); } catch (_) {}
+        if (popoutMode === "youtube") { try { YouTubeEngine.pause(); } catch (_) {} }
         renderTransport();
         renderPlayerPanels();
       }
@@ -1174,9 +1205,11 @@ function iconMarkup(name, cls = "icon") {
 
     // If a popout is open, keep it adapted to this track (switching
     // modes as needed) rather than closing it. When it's about to host
-    // this YouTube track itself, skip loading into the main window's
-    // own iframe too — the popout is the one producing audio for it.
-    const popoutWillHostThis = popoutActive && track.service === "youtube";
+    // this track itself (YouTube video or Spotify audio), skip loading
+    // it into the main window's own engine too — the popout is the one
+    // producing audio for it.
+    const isSpotifyTrack = track.service === "spotify_track" || track.service === "spotify_episode";
+    const popoutWillHostThis = popoutActive && (track.service === "youtube" || isSpotifyTrack);
     if (popoutActive) syncPopoutToCurrentTrack(track);
 
     if (!popoutWillHostThis) {
@@ -1189,10 +1222,12 @@ function iconMarkup(name, cls = "icon") {
 
   function togglePlayPause() {
     if (!getCurrentTrack()) return;
-    // While a popout is actively playing YouTube, it has its own
-    // play/pause button — the main window's button is inert to avoid
-    // double-controlling the (paused, hidden) main-window iframe.
-    if (popoutActive && activeEngine() === "youtube") return;
+    // While a popout is actively hosting playback (YouTube video or
+    // Spotify audio), it has its own play/pause button — the main
+    // window's button is inert to avoid double-controlling the
+    // paused/disconnected main-window engine.
+    const engineNow = activeEngine();
+    if (popoutActive && ((engineNow === "youtube" && popoutMode === "youtube") || (engineNow === "spotify" && popoutMode === "spotify"))) return;
     playing = !playing;
     const engine = activeEngine();
     if (engine === "youtube") {
@@ -1396,7 +1431,7 @@ function iconMarkup(name, cls = "icon") {
   function seekTo(sec) {
     if (!isFinite(sec) || sec < 0) return;
     const engine = activeEngine();
-    if (popoutActive && engine === "youtube") return; // popout has its own seek bar
+    if (popoutActive && ((engine === "youtube" && popoutMode === "youtube") || (engine === "spotify" && popoutMode === "spotify"))) return; // popout has its own seek bar
     if (engine === "youtube") YouTubeEngine.seekTo(sec);
     else if (engine === "audio") AudioEngine.seekTo(sec);
     else if (engine === "spotify") SpotifyEngine.seekTo(sec);
@@ -2526,10 +2561,13 @@ function iconMarkup(name, cls = "icon") {
     pp.errorEl.hidden = true;
 
     const isYoutubeTrack = !!(t && t.service === "youtube");
-    pp.ytWrap.hidden = !isYoutubeTrack || popoutActive;
+    const isSpotifyTrack = !!(t && (t.service === "spotify_track" || t.service === "spotify_episode"));
+    const isPopoutHostingThis = popoutActive &&
+      ((isYoutubeTrack && popoutMode === "youtube") || (isSpotifyTrack && popoutMode === "spotify"));
+    pp.ytWrap.hidden = !isYoutubeTrack || isPopoutHostingThis;
     pp.waveformEl.hidden = !(t && t.service === "direct_audio");
-    if (pp.pipHintEl) pp.pipHintEl.hidden = !isYoutubeTrack || popoutActive;
-    if (pp.popoutActiveNote) pp.popoutActiveNote.hidden = !(isYoutubeTrack && popoutActive);
+    if (pp.pipHintEl) pp.pipHintEl.hidden = !isYoutubeTrack || isPopoutHostingThis;
+    if (pp.popoutActiveNote) pp.popoutActiveNote.hidden = !isPopoutHostingThis;
     if (pp.popoutBtn) pp.popoutBtn.hidden = !t;
 
     pp.badgeRow.innerHTML = "";
@@ -2541,7 +2579,7 @@ function iconMarkup(name, cls = "icon") {
     setIcon(pp.playBtn, playing ? "pause" : "play");
     pp.volumeSlider.value = volume;
 
-    const transportInert = isYoutubeTrack && popoutActive;
+    const transportInert = isPopoutHostingThis;
     pp.playBtn.classList.toggle("transport-inert", transportInert);
     pp.progressTrack.classList.toggle("transport-inert", transportInert);
 
