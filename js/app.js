@@ -1243,13 +1243,23 @@ function iconMarkup(name, cls = "icon") {
 
   function togglePlayPause() {
     if (!getCurrentTrack()) return;
-    // While a popout is actively hosting playback (YouTube video or
-    // Spotify audio), it has its own play/pause button — the main
-    // window's button is inert to avoid double-controlling the
-    // paused/disconnected main-window engine.
     const engineNow = activeEngine();
-    if (popoutActive && ((engineNow === "youtube" && popoutMode === "youtube") || (engineNow === "spotify" && popoutMode === "spotify"))) return;
+    const popoutIsHostingThis = popoutActive &&
+      ((engineNow === "youtube" && popoutMode === "youtube") || (engineNow === "spotify" && popoutMode === "spotify"));
+
     playing = !playing;
+
+    if (popoutIsHostingThis) {
+      // Playback is actually happening in the popout — relay the command
+      // there instead of touching the main window's own (paused/
+      // disconnected) engine, which wouldn't affect what's audible.
+      try {
+        popoutWindowRef.postMessage({ source: "plathub-main", type: "remoteTogglePlay" }, window.location.origin);
+      } catch (_) {}
+      renderTransport();
+      return;
+    }
+
     const engine = activeEngine();
     if (engine === "youtube") {
       playing ? YouTubeEngine.play() : YouTubeEngine.pause();
@@ -1452,7 +1462,18 @@ function iconMarkup(name, cls = "icon") {
   function seekTo(sec) {
     if (!isFinite(sec) || sec < 0) return;
     const engine = activeEngine();
-    if (popoutActive && ((engine === "youtube" && popoutMode === "youtube") || (engine === "spotify" && popoutMode === "spotify"))) return; // popout has its own seek bar
+    const popoutIsHostingThis = popoutActive &&
+      ((engine === "youtube" && popoutMode === "youtube") || (engine === "spotify" && popoutMode === "spotify"));
+
+    if (popoutIsHostingThis) {
+      try {
+        popoutWindowRef.postMessage({ source: "plathub-main", type: "remoteSeek", position: sec }, window.location.origin);
+      } catch (_) {}
+      position = sec;
+      renderTransport();
+      return;
+    }
+
     if (engine === "youtube") YouTubeEngine.seekTo(sec);
     else if (engine === "audio") AudioEngine.seekTo(sec);
     else if (engine === "spotify") SpotifyEngine.seekTo(sec);
@@ -2209,6 +2230,15 @@ function iconMarkup(name, cls = "icon") {
     if (SpotifyEngine.isReady) {
       SpotifyEngine.setVolume(Math.min(1, masterVol * (appSettings.vol_spotify ?? 1)));
     }
+    if (popoutActive && (popoutMode === "youtube" || popoutMode === "spotify") && popoutWindowRef) {
+      const key = popoutMode === "youtube" ? "vol_youtube" : "vol_spotify";
+      try {
+        popoutWindowRef.postMessage({
+          source: "plathub-main", type: "remoteSetVolume",
+          volume: Math.min(1, masterVol * (appSettings[key] ?? 1)),
+        }, window.location.origin);
+      } catch (_) {}
+    }
   }
 
   /**
@@ -2600,9 +2630,12 @@ function iconMarkup(name, cls = "icon") {
     setIcon(pp.playBtn, playing ? "pause" : "play");
     pp.volumeSlider.value = volume;
 
-    const transportInert = isPopoutHostingThis;
-    pp.playBtn.classList.toggle("transport-inert", transportInert);
-    pp.progressTrack.classList.toggle("transport-inert", transportInert);
+    // Note: playBtn/progressTrack are no longer marked "inert" while the
+    // popout hosts playback — they now correctly relay play/pause/seek
+    // commands to it (see togglePlayPause/seekTo), so they stay fully
+    // interactive.
+    pp.playBtn.classList.remove("transport-inert");
+    pp.progressTrack.classList.remove("transport-inert");
 
     renderTransportInto(pp);
   }
@@ -3043,6 +3076,7 @@ function iconMarkup(name, cls = "icon") {
       repeatMode,
       shuffleQueue,
       shuffleQueueIndex,
+      radioMode,
     });
   }
 
@@ -3067,6 +3101,7 @@ function iconMarkup(name, cls = "icon") {
     repeatMode        = session.repeatMode  ?? repeatMode;
     shuffleQueue      = session.shuffleQueue ?? [];
     shuffleQueueIndex = session.shuffleQueueIndex ?? -1;
+    radioMode         = session.radioMode ?? radioMode;
 
     // Start playback from the saved position
     currentTrackId = track.id;

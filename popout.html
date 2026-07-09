@@ -675,6 +675,30 @@
     } else if (data.type === "seekLocal") {
       if (mode === "youtube" && player) { try { player.seekTo(0, true); } catch (_) {} }
       else if (mode === "spotify" && spPlayer) { try { spPlayer.seek(0); } catch (_) {} }
+    } else if (data.type === "remoteTogglePlay") {
+      // The main window's play/pause button, relayed here since this
+      // window is the one actually hosting playback.
+      if (mode === "youtube" && player) {
+        try {
+          if (player.getPlayerState() === YT.PlayerState.PLAYING) player.pauseVideo();
+          else player.playVideo();
+        } catch (_) {}
+      } else if (mode === "spotify" && spPlayer) {
+        try { spPlayer.togglePlay(); } catch (_) {}
+      }
+    } else if (data.type === "remoteSeek" && typeof data.position === "number") {
+      if (mode === "youtube" && player) {
+        try { player.seekTo(data.position, true); } catch (_) {}
+      } else if (mode === "spotify" && spPlayer) {
+        try { spPlayer.seek(Math.round(data.position * 1000)); } catch (_) {}
+      }
+    } else if (data.type === "remoteSetVolume" && typeof data.volume === "number") {
+      volumeSlider.value = Math.round(data.volume * 100);
+      if (mode === "youtube" && player) {
+        try { player.setVolume(Math.round(data.volume * 100)); } catch (_) {}
+      } else if (mode === "spotify" && spPlayer) {
+        try { spPlayer.setVolume(data.volume); } catch (_) {}
+      }
     }
   });
 

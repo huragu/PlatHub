@@ -17,6 +17,7 @@ const SpotifyEngine = (() => {
   let ready = false;
   let pendingTrackUri = null;
   let pendingPlayState = false;
+  let pendingVolume = null;
   let lastKnownState = null;
   let endFired = false;
 
@@ -67,7 +68,13 @@ const SpotifyEngine = (() => {
         const token = await SpotifyAuth.getValidAccessToken();
         cb(token || "");
       },
-      volume: 0.8,
+      // Use the actual intended volume if one is already queued (e.g. via
+      // load() being called before the player existed yet), rather than
+      // a hardcoded default — otherwise playback briefly starts at
+      // whatever this fallback is, regardless of the user's real
+      // preference, until something else happens to correct it (which,
+      // previously, nothing did).
+      volume: pendingVolume ?? 0.8,
     });
 
     player.addListener("ready", ({ device_id }) => {
@@ -75,6 +82,11 @@ const SpotifyEngine = (() => {
       ready = true;
       onReadyCb && onReadyCb();
       if (pendingTrackUri) {
+        // Explicitly (re-)apply the intended volume before starting
+        // playback — the constructor's `volume` option above only takes
+        // effect once, at creation time; this covers every subsequent
+        // "was queued before ready" case too.
+        if (pendingVolume != null) { try { player.setVolume(pendingVolume); } catch (_) {} }
         playUri(pendingTrackUri, pendingPlayState);
         pendingTrackUri = null;
       }
@@ -119,6 +131,7 @@ const SpotifyEngine = (() => {
     endFired = false;
     prevPlaying = false;
     currentTrackUri = uri;
+    pendingVolume = volume; // always track this — used above if the player doesn't exist yet
     setVolume(volume);
     if (!ready || !deviceId) {
       pendingTrackUri = uri;
